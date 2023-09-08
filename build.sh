@@ -4,13 +4,21 @@ ROOT_DIR=$(dirname $(readlink -f ${BASH_SOURCE[0]}))
 function prepare() {
     ARCH=$(arch)
     if [ "$ARCH" == "x86_64" ]; then
-            export EXTRA_GOFLAGS="-gcflags=\"-N -l\""
-            export EXTRA_CFLAGS="-O0 -g"
             export EXTRA_CDEFINE="-D__x86_64__"
     fi
 
+    export EXTRA_GOFLAGS="-gcflags=\"-N -l\""
+    export EXTRA_CFLAGS="-O0 -g"    
+    
+    (cd $ROOT_DIR/vendor/google.golang.org/protobuf/cmd/protoc-gen-go && go build -mod=vendor)
     export PATH=$PATH:$ROOT_DIR/vendor/google.golang.org/protobuf/cmd/protoc-gen-go/
-    cp $ROOT_DIR/depends/include/5.10.0-60.18.0.50.oe2203/bpf_helper_defs_ext.h $ROOT_DIR/bpf/include/
+   
+    VERSION=$(uname -r | cut -d '.' -f 1,2)
+    if [ "VERSION" == "6.1" ]; then
+	    cp $ROOT_DIR/depends/include/6.1/bpf_helper_defs_ext.h $ROOT_DIR/bpf/include/
+    elif [ "$VERSION" == "5.10" ];then
+	    cp $ROOT_DIR/depends/include/5.10.0-60.18.0.50.oe2203/bpf_helper_defs_ext.h $ROOT_DIR/bpf/include/
+    fi
 }
 
 function install() {
@@ -59,26 +67,32 @@ if [ "$1" == "-h"  -o  "$1" == "--help" ]; then
     exit
 fi
 
+MDA_SWITCH=off
+VERSION=$(uname -r | grep -o 'oe[^.]*')
+if [ "VERSION" == "6.1" ]; then
+	MDA_SWITCH=off
+fi
+
 if [ -z "$1" -o "$1" == "-b"  -o  "$1" == "--build" ]; then
     prepare
-    make
+    make MDA=$MDA_SWITCH
     exit
 fi
 
 if [ "$1" == "-i"  -o  "$1" == "--install" ]; then
-    make install
+    make install MDA=$MDA_SWITCH
     install
     exit
 fi
 
 if [ "$1" == "-u"  -o  "$1" == "--uninstall" ]; then
-    make uninstall
+    make uninstall MDA=$MDA_SWITCH
     uninstall
     exit
 fi
 
 if [ "$1" == "-c"  -o  "$1" == "--clean" ]; then
-    make clean
+    make clean MDA=$MDA_SWITCH
     clean
     exit
 fi

@@ -51,8 +51,10 @@ all:
 	$(call printlog, BUILD, "kernel")
 	$(QUIET) make -C kernel/ko_src
 
+ifeq ($(MDA), on)
 	$(call printlog, BUILD, $(APPS3))
 	$(QUIET) cd oncn-mda && cmake . -B build && make -C build
+endif
 
 install:
 	$(QUIET) make install -C api/v2-c
@@ -65,10 +67,12 @@ install:
 	$(call printlog, INSTALL, $(INSTALL_BIN)/$(APPS2))
 	$(QUIET) install -Dp -m 0500 $(APPS2) $(INSTALL_BIN)
 
+ifeq ($(MDA), on)
 	$(call printlog, INSTALL, $(INSTALL_BIN)/$(APPS3))
 	$(QUIET) install -Dp -m 0500 oncn-mda/deploy/$(APPS3) $(INSTALL_BIN)
 	$(QUIET) install -Dp -m 0400 oncn-mda/build/ebpf_src/CMakeFiles/sock_ops.dir/sock_ops.c.o /usr/share/oncn-mda/sock_ops.c.o
 	$(QUIET) install -Dp -m 0400 oncn-mda/build/ebpf_src/CMakeFiles/sock_redirect.dir/sock_redirect.c.o /usr/share/oncn-mda/sock_redirect.c.o
+endif
 
 uninstall:
 	$(QUIET) make uninstall -C api/v2-c
@@ -79,8 +83,10 @@ uninstall:
 	$(QUIET) rm -rf $(INSTALL_BIN)/$(APPS1)
 	$(call printlog, UNINSTALL, $(INSTALL_BIN)/$(APPS2))
 	$(QUIET) rm -rf $(INSTALL_BIN)/$(APPS2)
+ifeq ($(MDA), on)
 	$(call printlog, UNINSTALL, $(INSTALL_BIN)/$(APPS3))
 	$(QUIET) rm -rf $(INSTALL_BIN)/$(APPS3)
+endif
 
 clean:
 	$(call printlog, CLEAN, $(APPS1))
@@ -89,9 +95,11 @@ clean:
 	$(call printlog, CLEAN, $(APPS2))
 	$(QUIET) rm -rf $(APPS2) $(APPS2)
 
+ifeq ($(MDA), on)
 	$(call printlog, CLEAN, $(APPS3))
 	$(QUIET) rm -rf oncn-mda/build
 	$(QUIET) rm -rf oncn-mda/deploy
+endif
 
 	$(QUIET) make clean -C api/v2-c
 	$(QUIET) make clean -C bpf/deserialization_to_bpf_map
