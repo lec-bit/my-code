@@ -1,0 +1,49 @@
+[root@master mod]# kubectl get pod -A
+NAMESPACE      NAME                                        READY   STATUS    RESTARTS   AGE
+default        fortio-client-deployment-5dd87867f8-frsls   1/1     Running   0          28h
+default        fortio-server-deployment-7969d8d46c-l7zrw   1/1     Running   1          11d
+default        fortio-server-deployment-7969d8d46c-pj7d6   1/1     Running   1          11d
+istio-system   istio-ingressgateway-549c8769c4-t5qp7       1/1     Running   1          11d
+istio-system   istiod-58f8f6cd48-kw4mw                     1/1     Running   1          11d
+kmesh-system   kmesh-6fqt9                                 1/1     Running   0          117m
+kmesh-system   kmesh-l5z2j                                 1/1     Running   0          117m
+kube-system    calico-kube-controllers-6dfcd885bf-whkp4    1/1     Running   1          52d
+kube-system    calico-node-l52nh                           1/1     Running   1          52d
+kube-system    calico-node-llm78                           1/1     Running   1          52d
+kube-system    coredns-74ff55c5b-clwkh                     1/1     Running   1          53d
+kube-system    coredns-74ff55c5b-wmdvl                     1/1     Running   1          53d
+kube-system    etcd-master                                 1/1     Running   10         145d
+kube-system    kube-apiserver-master                       1/1     Running   10         145d
+kube-system    kube-controller-manager-master              1/1     Running   41         145d
+kube-system    kube-proxy-jdg2z                            1/1     Running   9          145d
+kube-system    kube-proxy-tqp45                            1/1     Running   10         145d
+kube-system    kube-scheduler-master                       1/1     Running   39         145d
+[root@master mod]# kubectl logs -f -n kmesh-system kmesh-l5z2j
+time="2024-02-19T10:16:52Z" level=info msg="service node sidecar~192.168.11.53~kmesh-system.kmesh-system~kmesh-system.svc.cluster.local connect to discovery address istiod.istio-system.svc:15012" subsys=controller/envoy
+time="2024-02-19T10:16:52Z" level=info msg="options InitDaemonConfig successful" subsys=manager
+time="2024-02-19T10:16:53Z" level=info msg="bpf Start successful" subsys=manager
+time="2024-02-19T10:16:53Z" level=info msg="controller Start successful" subsys=manager
+time="2024-02-19T10:16:53Z" level=info msg="command StartServer successful" subsys=manager
+time="2024-02-19T10:16:53Z" level=info msg="start write CNI config\n" subsys="cni installer"
+time="2024-02-19T10:16:53Z" level=info msg="kmesh cni use chained\n" subsys="cni installer"
+time="2024-02-19T10:16:54Z" level=info msg="Copied /usr/bin/kmesh-cni to /opt/cni/bin." subsys="cni installer"
+time="2024-02-19T10:16:54Z" level=info msg="kubeconfig either does not exist or is out of date, writing a new one" subsys="cni installer"
+time="2024-02-19T10:16:54Z" level=info msg="wrote kubeconfig file /etc/cni/net.d/kmesh-cni-kubeconfig" subsys="cni installer"
+time="2024-02-19T10:16:54Z" level=info msg="command Start cni successful" subsys=manager
+time="2024-02-19T10:48:14Z" level=warning msg="reconnect due to rpc error: code = Unavailable desc = closing transport due to: connection error: desc = \"error reading from server: EOF\", received prior goaway: code: NO_ERROR" subsys=controller/envoy
+time="2024-02-19T11:16:25Z" level=warning msg="reconnect due to rpc error: code = Unavailable desc = closing transport due to: connection error: desc = \"error reading from server: EOF\", received prior goaway: code: NO_ERROR" subsys=controller/envoy
+^C
+[root@master mod]# kubectl logs -f -n kmesh-system kmesh-
+kmesh-6fqt9  kmesh-l5z2j  
+[root@master mod]# kubectl logs -f -n kmesh-system kmesh-6fqt9 
+time="2024-02-19T09:41:09Z" level=info msg="service node sidecar~192.168.11.233~kmesh-system.kmesh-system~kmesh-system.svc.cluster.local connect to discovery address istiod.istio-system.svc:15012" subsys=controller/envoy
+time="2024-02-19T09:41:09Z" level=info msg="options InitDaemonConfig successful" subsys=manager
+time="2024-02-19T09:41:10Z" level=info msg="bpf Start successful" subsys=manager
+time="2024-02-19T09:41:10Z" level=info msg="controller Start successful" subsys=manager
+time="2024-02-19T09:41:10Z" level=info msg="command StartServer successful" subsys=manager
+time="2024-02-19T09:41:10Z" level=info msg="start write CNI config\n" subsys="cni installer"
+time="2024-02-19T09:41:10Z" level=info msg="kmesh cni use chained\n" subsys="cni installer"
+time="2024-02-19T09:41:11Z" level=info msg="Copied /usr/bin/kmesh-cni to /opt/cni/bin." subsys="cni installer"
+time="2024-02-19T09:41:11Z" level=info msg="kubeconfig either does not exist or is out of date, writing a new one" subsys="cni installer"
+time="2024-02-19T09:41:11Z" level=info msg="wrote kubeconfig file /etc/cni/net.d/kmesh-cni-kubeconfig" subsys="cni installer"
+time="2024-02-19T09:41:11Z" level=info msg="command Start cni successful" subsys=manager
