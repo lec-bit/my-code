@@ -1,0 +1,126 @@
+/*
+ * Copyright 2024 The Kmesh Authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at:
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+
+ * Author: lec-bit
+ * Create: 2024-02-27
+ */
+
+package security
+
+import (
+	"sync"
+	"time"
+
+	"istio.io/istio/pkg/security"
+	"istio.io/istio/security/pkg/nodeagent/cache"
+	citadel "istio.io/istio/security/pkg/nodeagent/caclient/providers/citadel"
+)
+ 
+ var certs_maps sync.Map
+ 
+ var tlsOpts *citadel.TLSOptions
+ 
+ type entry struct {
+	value interface{}
+	mu    sync.Mutex
+}
+ 
+ func fetch_cert(resourceName string) (secret *security.SecretItem, err error) {
+	 secOpts := &security.Options{}
+	 client, err := cache.NewSecretManagerClient(nil, secOpts) // 传递你需要的参数，将所需参数初始化好
+	 if err != nil {
+		 
+	 }
+	 ns, err := client.GenerateSecret(resourceName)
+ 
+	 return ns, nil
+ }
+ 
+ //有效期到期，提前30s检查并自动刷新
+ func delayedTask(delaytime time.Time, resourceName string ) {
+	 var new_certs *security.SecretItem
+	 var err error
+ 
+	 for {
+		 <-time.After(time.Until(delaytime.Add(-30 * time.Second)))
+		 if _, ok := certs_maps.Load(resourceName); !ok {
+			 return
+		 } else {
+			 new_certs, err = fetch_cert(resourceName);
+			 if err != nil {
+				 //重新获取
+			 }
+		 }
+		 // 检查 key 是否存在，如果存在则刷新，否则放弃
+		 v, ok := certs_maps.Load(resourceName);
+		 if ok {
+			e := v.(*entry)
+
+			//乐观锁
+			e.mu.Lock()
+			if _, ok := certs_maps.Load(resourceName); !ok {
+				e.mu.Unlock()
+				return
+			} 
+			e.value = new_certs;
+			e.mu.Unlock()
+			
+			delaytime = new_certs.ExpireTime;
+
+		 }
+
+	 }
+ }
+ 
+ /*从通道中获取
+	 hashmap中检查
+	 检查有效期
+	 调用fetch_cert
+	 创建delay任务，到点自动执行
+ */
+ func update_certs(resourceName string) {
+	 var new_certs *security.SecretItem
+	 var err error
+ 
+	 //检查hashmap中是否存在
+	 if certs, ok := certs_maps.Load(resourceName); ok {
+		 //检查有效期
+		 if certs.ExpireTime.After(time.Now()) {
+			 return
+		 } else {
+			 new_certs, err = fetch_cert(resourceName);
+			 if err != nil {
+				 //重新获取
+			 }
+		 }
+ 
+	 } else {
+		 new_certs, err = fetch_cert(resourceName);
+		 if err != nil {
+			 //重新获取
+		 }
+	 }
+ 
+	 certs_maps.Store(resourceName, *new_certs)
+	 delaytime := new_certs.ExpireTime;
+	 go delayedTask(delaytime, resourceName);
+ }
+ 
+ 
+ func delete_certs(resourceName string) {
+	 if _, ok := certs_maps.Load(resourceName); ok {
+		certs_maps.Delete(resourceName)
+	 }
+ }
