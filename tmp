@@ -20,34 +20,68 @@
 package kmeshsecurity
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
 	"path/filepath"
 
-	"istio.io/istio/pilot/cmd/pilot-agent/options"
-	"istio.io/istio/pilot/cmd/pilot-agent/status"
-	"istio.io/istio/pilot/pkg/features"
-	"istio.io/istio/pkg/config/constants"
+	"google.golang.org/grpc"
+	pb "istio.io/api/security/v1alpha1"
 	"istio.io/istio/pkg/env"
 	"istio.io/istio/pkg/jwt"
 	"istio.io/istio/pkg/security"
-	"istio.io/istio/pkg/wasm"
-	"istio.io/istio/security/pkg/nodeagent/cache"
 	citadel "istio.io/istio/security/pkg/nodeagent/caclient/providers/citadel"
-	"istio.io/istio/security/pkg/nodeagent/cafile"
-	"istio.io/pkg/log"
+	"kmesh.net/kmesh/pkg/logger"
+	"kmesh.net/kmesh/pkg/nets"
 )
  
  var certs_maps sync.Map
- 
- var tlsOpts *citadel.TLSOptions
 
+ var log = logger.NewLoggerField("kmeshsecurity")
+
+ var CACertFilePath = ""
+
+ 
+ // ProxyArgs provides all of the configuration parameters for the Pilot proxy.
+type ProxyArgs struct {
+	DNSDomain          string
+	StsPort            int
+	TokenManagerPlugin string
+
+	MeshConfigFile string
+
+	// proxy config flags (named identically)
+	ServiceCluster         string
+	ProxyLogLevel          string
+	ProxyComponentLogLevel string
+	Concurrency            int
+	TemplateFile           string
+	OutlierLogPath         string
+
+	PodName      string
+	PodNamespace string
+
+	// enableProfiling enables profiling via web interface host:port/debug/pprof/
+	EnableProfiling bool
+}
+
+
+const (
+	DefaultPurgeInterval         = 1 * time.Hour
+	DefaultModuleExpiry          = 24 * time.Hour
+	DefaultHTTPRequestTimeout    = 15 * time.Second
+	DefaultHTTPRequestMaxRetries = 5
+)
+
+ var tlsOpts *citadel.TLSOptions
+ var 	PilotCertProvider = env.Register("PILOT_CERT_PROVIDER", "istiod",
+ "The provider of Pilot DNS certificate.").Get()
  var (
 	InstanceIPVar        = env.Register("INSTANCE_IP", "", "")
 	PodNameVar           = env.Register("POD_NAME", "", "")
 	PodNamespaceVar      = env.Register("POD_NAMESPACE", "", "")
-	kubeAppProberNameVar = env.Register(status.KubeAppProberEnvName, "", "")
+	kubeAppProberNameVar = env.Register(KubeAppProberEnvName, "", "")
 	ProxyConfigEnv       = env.Register(
 		"PROXY_CONFIG",
 		"",
@@ -126,16 +160,16 @@ import (
 	wasmInsecureRegistries = env.Register("WASM_INSECURE_REGISTRIES", "",
 		"allow agent pull wasm plugin from insecure registries or https server, for example: 'localhost:5000,docker-registry:5000'").Get()
 
-	wasmModuleExpiry = env.Register("WASM_MODULE_EXPIRY", wasm.DefaultModuleExpiry,
+	wasmModuleExpiry = env.Register("WASM_MODULE_EXPIRY", DefaultModuleExpiry,
 		"cache expiration duration for a wasm module.").Get()
 
-	wasmPurgeInterval = env.Register("WASM_PURGE_INTERVAL", wasm.DefaultPurgeInterval,
+	wasmPurgeInterval = env.Register("WASM_PURGE_INTERVAL", DefaultPurgeInterval,
 		"interval between checking the expiration of wasm modules").Get()
 
-	wasmHTTPRequestTimeout = env.Register("WASM_HTTP_REQUEST_TIMEOUT", wasm.DefaultHTTPRequestTimeout,
+	wasmHTTPRequestTimeout = env.Register("WASM_HTTP_REQUEST_TIMEOUT", DefaultHTTPRequestTimeout,
 		"timeout per a HTTP request for pulling a Wasm module via http/https").Get()
 
-	wasmHTTPRequestMaxRetries = env.Register("WASM_HTTP_REQUEST_MAX_RETRIES", wasm.DefaultHTTPRequestMaxRetries,
+	wasmHTTPRequestMaxRetries = env.Register("WASM_HTTP_REQUEST_MAX_RETRIES", DefaultHTTPRequestMaxRetries,
 		"maximum number of HTTP/HTTPS request retries for pulling a Wasm module via http/https").Get()
 
 	enableWDSEnv = env.Register("PEER_METADATA_DISCOVERY", false,
@@ -147,7 +181,7 @@ import (
 		"Envoy prometheus redirection port value").Get()
 
 	// Defined by https://github.com/grpc/proposal/blob/c5722a35e71f83f07535c6c7c890cf0c58ec90c0/A27-xds-global-load-balancing.md#xdsclient-and-bootstrap-file
-	grpcBootstrapEnv = env.Register("GRPC_XDS_BOOTSTRAP", filepath.Join(constants.ConfigPathDir, "grpc-bootstrap.json"),
+	grpcBootstrapEnv = env.Register("GRPC_XDS_BOOTSTRAP", filepath.Join(ConfigPathDir, "grpc-bootstrap.json"),
 		"Path where gRPC expects to read a bootstrap file. Agent will generate one if set.").Get()
 
 	disableEnvoyEnv = env.Register("DISABLE_ENVOY", false,
@@ -180,8 +214,7 @@ import (
 }
  
 var (
-	loggingOptions = log.DefaultOptions()
-	proxyArgs      options.ProxyArgs
+	proxyArgs      ProxyArgs
 )
 
 const (
@@ -195,14 +228,29 @@ const (
 //	trustDomainEnv     = "cluster.local"
 	jwtPath            = "/var/run/secrets/tokens/istio-token"
 	rootCertPath       = "/var/run/secrets/istio/root-cert.pem"
+
+	KubeAppProberEnvName = "ISTIO_KUBE_APP_PROBERS"
+
+	ConfigPathDir = "./etc/istio/proxy"
+	
+	
 )
+
 
 //grpc连接建立位置，建立一次？
  func fetch_cert(resourceName string) (secret *security.SecretItem, err error) {
-	secOpts := &security.Options{
+	discoveryAddress := env.Register("MESH_CONTROLLER", "istiod.istio-system.svc:15012", "").Get()
+	var	grpcConn	*grpc.ClientConn
+	var client   pb.IstioCertificateServiceClient
+	if grpcConn, err = nets.GrpcConnect(discoveryAddress); err != nil {
+		return fmt.Errorf("ads grpc connect failed: %v", err)
+	}
+	client = pb.NewIstioCertificateServiceClient(grpcConn)
+
+/*	secOpts := &security.Options{
 		CAEndpoint:                     caEndpointEnv,
 		CAProviderName:                 caProviderEnv,
-		PilotCertProvider:              features.PilotCertProvider,
+		PilotCertProvider:              PilotCertProvider,
 		OutputKeyCertToDir:             outputKeyCertToDir,
 		ProvCert:                       provCert,
 		ClusterID:                      clusterIDVar.Get(),
@@ -220,26 +268,29 @@ const (
 		SecretRotationGracePeriodRatio: secretRotationGracePeriodRatioEnv,
 		STSPort:                        0,
 		CertSigner:                     certSigner.Get(),
-		CARootPath:                     cafile.CACertFilePath,
+		CARootPath:                     CACertFilePath,
 		CertChainFilePath:              security.DefaultCertChainFilePath,
 		KeyFilePath:                    security.DefaultKeyFilePath,
 		RootCertFilePath:               security.DefaultRootCertFilePath,
 	}
+*/
 	//secOpts, err := options.NewSecurityOptions(proxyConfig, proxyArgs.StsPort, proxyArgs.TokenManagerPlugin)
 
+
+
+//	caclient, err := citadel.NewCitadelClient(secOpts, tlsOpts)
+//	if err != nil {
+//		return nil, err
+//	}
+
+//	 client, err := cache.NewSecretManagerClient(caclient, secOpts)             // 传递需要的参数，将所需参数初始化好
+//	 if err != nil {
+//		log.Errorf("Error creating SecretManager client: %v", err)
+//	 }
 	tlsOpts = &citadel.TLSOptions{
 		RootCert:      rootCertPath,
 	}
-
-	caclient, err := citadel.NewCitadelClient(secOpts, tlsOpts)
-	if err != nil {
-		return nil, err
-	}
-
-	 client, err := cache.NewSecretManagerClient(caclient, secOpts) // 传递你需要的参数，将所需参数初始化好
-	 if err != nil {
-		log.Errorf("Error creating SecretManager client: %v", err)
-	 }
+	
 	 ns, err := client.GenerateSecret(resourceName)
 
      if err != nil {
