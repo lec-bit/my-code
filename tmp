@@ -20,329 +20,240 @@
 package kmeshsecurity
 
 import (
+	"bytes"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
-
-	"path/filepath"
 
 	"google.golang.org/grpc"
 	pb "istio.io/api/security/v1alpha1"
 	"istio.io/istio/pkg/env"
-	"istio.io/istio/pkg/jwt"
 	"istio.io/istio/pkg/security"
-	citadel "istio.io/istio/security/pkg/nodeagent/caclient/providers/citadel"
+	"istio.io/istio/pkg/spiffe"
+	"istio.io/istio/security/pkg/monitoring"
+	nodeagentutil "istio.io/istio/security/pkg/nodeagent/util"
+	pkiutil "istio.io/istio/security/pkg/pki/util"
 	"kmesh.net/kmesh/pkg/logger"
 	"kmesh.net/kmesh/pkg/nets"
 )
+  
+  var certs_maps sync.Map
  
- var certs_maps sync.Map
-
- var log = logger.NewLoggerField("kmeshsecurity")
-
- var CACertFilePath = ""
-
+  var log = logger.NewLoggerField("kmeshsecurity")
  
- // ProxyArgs provides all of the configuration parameters for the Pilot proxy.
-type ProxyArgs struct {
-	DNSDomain          string
-	StsPort            int
-	TokenManagerPlugin string
-
-	MeshConfigFile string
-
-	// proxy config flags (named identically)
-	ServiceCluster         string
-	ProxyLogLevel          string
-	ProxyComponentLogLevel string
-	Concurrency            int
-	TemplateFile           string
-	OutlierLogPath         string
-
-	PodName      string
-	PodNamespace string
-
-	// enableProfiling enables profiling via web interface host:port/debug/pprof/
-	EnableProfiling bool
+  var CACertFilePath = ""
+ // concatCerts concatenates PEM certificates, making sure each one starts on a new line
+func concatCerts(certsPEM []string) []byte {
+	if len(certsPEM) == 0 {
+		return []byte{}
+	}
+	var certChain bytes.Buffer
+	for i, c := range certsPEM {
+		certChain.WriteString(c)
+		if i < len(certsPEM)-1 && !strings.HasSuffix(c, "\n") {
+			certChain.WriteString("\n")
+		}
+	}
+	return certChain.Bytes()
 }
-
-
-const (
-	DefaultPurgeInterval         = 1 * time.Hour
-	DefaultModuleExpiry          = 24 * time.Hour
-	DefaultHTTPRequestTimeout    = 15 * time.Second
-	DefaultHTTPRequestMaxRetries = 5
-)
-
- var tlsOpts *citadel.TLSOptions
- var 	PilotCertProvider = env.Register("PILOT_CERT_PROVIDER", "istiod",
- "The provider of Pilot DNS certificate.").Get()
+  
+  // ProxyArgs provides all of the configuration parameters for the Pilot proxy.
+ type ProxyArgs struct {
+	 DNSDomain          string
+	 StsPort            int
+	 TokenManagerPlugin string
+ 
+	 MeshConfigFile string
+ 
+	 // proxy config flags (named identically)
+	 ServiceCluster         string
+	 ProxyLogLevel          string
+	 ProxyComponentLogLevel string
+	 Concurrency            int
+	 TemplateFile           string
+	 OutlierLogPath         string
+ 
+	 PodName      string
+	 PodNamespace string
+ 
+	 // enableProfiling enables profiling via web interface host:port/debug/pprof/
+	 EnableProfiling bool
+ }
+ 
+ 
+ const (
+	 DefaultPurgeInterval         = 1 * time.Hour
+	 DefaultModuleExpiry          = 24 * time.Hour
+	 DefaultHTTPRequestTimeout    = 15 * time.Second
+	 DefaultHTTPRequestMaxRetries = 5
+ )
+ 
+  var tlsOpts *TLSOptions
+  var 	PilotCertProvider = env.Register("PILOT_CERT_PROVIDER", "istiod",
+  "The provider of Pilot DNS certificate.").Get()
+ 
+  type entry struct {
+	 value interface{}
+	 mu    sync.Mutex
+ }
+  
  var (
-	InstanceIPVar        = env.Register("INSTANCE_IP", "", "")
-	PodNameVar           = env.Register("POD_NAME", "", "")
-	PodNamespaceVar      = env.Register("POD_NAMESPACE", "", "")
-	kubeAppProberNameVar = env.Register(KubeAppProberEnvName, "", "")
-	ProxyConfigEnv       = env.Register(
-		"PROXY_CONFIG",
-		"",
-		"The proxy configuration. This will be set by the injection - gateways will use file mounts.",
-	).Get()
-
-	serviceAccountVar = env.Register("SERVICE_ACCOUNT", "", "Name of service account")
-	clusterIDVar      = env.Register("ISTIO_META_CLUSTER_ID", "", "")
-	// Provider for XDS auth, e.g., gcp. By default, it is empty, meaning no auth provider.
-	xdsAuthProvider = env.Register("XDS_AUTH_PROVIDER", "", "Provider for XDS auth")
-
-	jwtPolicy = env.Register("JWT_POLICY", jwt.PolicyThirdParty,
-		"The JWT validation policy.")
-	// ProvCert is the environment controlling the use of pre-provisioned certs, for VMs.
-	// May also be used in K8S to use a Secret to bootstrap (as a 'refresh key'), but use short-lived tokens
-	// with extra SAN (labels, etc) in data path.
-	provCert = env.Register("PROV_CERT", "",
-		"Set to a directory containing provisioned certs, for VMs").Get()
-
-	// set to "SYSTEM" for ACME/public signed XDS servers.
-	xdsRootCA = env.Register("XDS_ROOT_CA", "",
-		"Explicitly set the root CA to expect for the XDS connection.").Get()
-
-	// set to "SYSTEM" for ACME/public signed CA servers.
-	caRootCA = env.Register("CA_ROOT_CA", "",
-		"Explicitly set the root CA to expect for the CA connection.").Get()
-
-	outputKeyCertToDir = env.Register("OUTPUT_CERTS", "",
-		"The output directory for the key and certificate. If empty, key and certificate will not be saved. "+
-			"Must be set for VMs using provisioning certificates.").Get()
-
-	caProviderEnv = env.Register("CA_PROVIDER", "Citadel", "name of authentication provider").Get()
-	caEndpointEnv = env.Register("CA_ADDR", "", "Address of the spiffe certificate provider. Defaults to discoveryAddress").Get()
-
-	trustDomainEnv = env.Register("TRUST_DOMAIN", "cluster.local",
-		"The trust domain for spiffe certificates").Get()
-
-	secretTTLEnv = env.Register("SECRET_TTL", 24*time.Hour,
-		"The cert lifetime requested by istio agent").Get()
-
-	fileDebounceDuration = env.Register("FILE_DEBOUNCE_DURATION", 100*time.Millisecond,
-		"The duration for which the file read operation is delayed once file update is detected").Get()
-
-	secretRotationGracePeriodRatioEnv = env.Register("SECRET_GRACE_PERIOD_RATIO", 0.5,
-		"The grace period ratio for the cert rotation, by default 0.5.").Get()
-	workloadRSAKeySizeEnv = env.Register("WORKLOAD_RSA_KEY_SIZE", 2048,
-		"Specify the RSA key size to use for workload certificates.").Get()
-	pkcs8KeysEnv = env.Register("PKCS8_KEY", false,
-		"Whether to generate PKCS#8 private keys").Get()
-	eccSigAlgEnv        = env.Register("ECC_SIGNATURE_ALGORITHM", "", "The type of ECC signature algorithm to use when generating private keys").Get()
-	eccCurvEnv          = env.Register("ECC_CURVE", "P256", "The elliptic curve to use when ECC_SIGNATURE_ALGORITHM is set to ECDSA").Get()
-	fileMountedCertsEnv = env.Register("FILE_MOUNTED_CERTS", false, "").Get()
-	credFetcherTypeEnv  = env.Register("CREDENTIAL_FETCHER_TYPE", security.JWT,
-		"The type of the credential fetcher. Currently supported types include GoogleComputeEngine").Get()
-	credIdentityProvider = env.Register("CREDENTIAL_IDENTITY_PROVIDER", "GoogleComputeEngine",
-		"The identity provider for credential. Currently default supported identity provider is GoogleComputeEngine").Get()
-	proxyXDSDebugViaAgent = env.Register("PROXY_XDS_DEBUG_VIA_AGENT", true,
-		"If set to true, the agent will listen on tap port and offer pilot's XDS istio.io/debug debug API there.").Get()
-	proxyXDSDebugViaAgentPort = env.Register("PROXY_XDS_DEBUG_VIA_AGENT_PORT", 15004,
-		"Agent debugging port.").Get()
-	// DNSCaptureByAgent is a copy of the env var in the init code.
-	DNSCaptureByAgent = env.Register("ISTIO_META_DNS_CAPTURE", false,
-		"If set to true, enable the capture of outgoing DNS packets on port 53, redirecting to istio-agent on :15053")
-
-	// DNSCaptureAddr is the address to listen.
-	DNSCaptureAddr = env.Register("DNS_PROXY_ADDR", "localhost:15053",
-		"Custom address for the DNS proxy. If it ends with :53 and running as root allows running without iptable DNS capture")
-
-	DNSForwardParallel = env.Register("DNS_FORWARD_PARALLEL", false,
-		"If set to true, agent will send parallel DNS queries to all upstream nameservers")
-
-	// Ability of istio-agent to retrieve proxyConfig via XDS for dynamic configuration updates
-	enableProxyConfigXdsEnv = env.Register("PROXY_CONFIG_XDS_AGENT", false,
-		"If set to true, agent retrieves dynamic proxy-config updates via xds channel").Get()
-
-	wasmInsecureRegistries = env.Register("WASM_INSECURE_REGISTRIES", "",
-		"allow agent pull wasm plugin from insecure registries or https server, for example: 'localhost:5000,docker-registry:5000'").Get()
-
-	wasmModuleExpiry = env.Register("WASM_MODULE_EXPIRY", DefaultModuleExpiry,
-		"cache expiration duration for a wasm module.").Get()
-
-	wasmPurgeInterval = env.Register("WASM_PURGE_INTERVAL", DefaultPurgeInterval,
-		"interval between checking the expiration of wasm modules").Get()
-
-	wasmHTTPRequestTimeout = env.Register("WASM_HTTP_REQUEST_TIMEOUT", DefaultHTTPRequestTimeout,
-		"timeout per a HTTP request for pulling a Wasm module via http/https").Get()
-
-	wasmHTTPRequestMaxRetries = env.Register("WASM_HTTP_REQUEST_MAX_RETRIES", DefaultHTTPRequestMaxRetries,
-		"maximum number of HTTP/HTTPS request retries for pulling a Wasm module via http/https").Get()
-
-	enableWDSEnv = env.Register("PEER_METADATA_DISCOVERY", false,
-		"If set to true, enable the peer metadata discovery extension in Envoy").Get()
-
-	envoyStatusPortEnv = env.Register("ENVOY_STATUS_PORT", 15021,
-		"Envoy health status port value").Get()
-	envoyPrometheusPortEnv = env.Register("ENVOY_PROMETHEUS_PORT", 15090,
-		"Envoy prometheus redirection port value").Get()
-
-	// Defined by https://github.com/grpc/proposal/blob/c5722a35e71f83f07535c6c7c890cf0c58ec90c0/A27-xds-global-load-balancing.md#xdsclient-and-bootstrap-file
-	grpcBootstrapEnv = env.Register("GRPC_XDS_BOOTSTRAP", filepath.Join(ConfigPathDir, "grpc-bootstrap.json"),
-		"Path where gRPC expects to read a bootstrap file. Agent will generate one if set.").Get()
-
-	disableEnvoyEnv = env.Register("DISABLE_ENVOY", false,
-		"Disables all Envoy agent features.").Get()
-
-	// certSigner is cert signer for workload cert
-	certSigner = env.Register("ISTIO_META_CERT_SIGNER", "",
-		"The cert signer info for workload cert")
-
-	istiodSAN = env.Register("ISTIOD_SAN", "",
-		"Override the ServerName used to validate Istiod certificate. "+
-			"Can be used as an alternative to setting /etc/hosts for VMs - discovery address will be an IP:port")
-
-	minimumDrainDurationEnv = env.Register("MINIMUM_DRAIN_DURATION",
-		5*time.Second,
-		"The minimum duration for which agent waits before it checks for active connections and terminates proxy "+
-			"when number of active connections become zero").Get()
-
-	exitOnZeroActiveConnectionsEnv = env.Register("EXIT_ON_ZERO_ACTIVE_CONNECTIONS",
-		false,
-		"When set to true, terminates proxy when number of active connections become zero during draining").Get()
-
-	useExternalWorkloadSDSEnv = env.Register("USE_EXTERNAL_WORKLOAD_SDS", false,
-		"When set to true, the istio-agent will require an external SDS and will throw an error if the workload SDS socket is not found").Get()
-)
-
- type entry struct {
-	value interface{}
-	mu    sync.Mutex
+	 proxyArgs      ProxyArgs
+ )
+ 
+ const (
+	 // MaxRetryInterval retry interval time when reconnect
+	 MaxRetryInterval = time.Second * 30
+ 
+	 // MaxRetryCount retry max count when reconnect
+	 MaxRetryCount = 3
+ 
+ //	credFetcherTypeEnv = "JWT"
+ //	trustDomainEnv     = "cluster.local"
+	 jwtPath            = "/var/run/secrets/tokens/istio-token"
+	 rootCertPath       = "/var/run/secrets/istio/root-cert.pem"
+ 
+	 KubeAppProberEnvName = "ISTIO_KUBE_APP_PROBERS"
+ 
+	 ConfigPathDir = "./etc/istio/proxy"
+	 
+ )
+ 
+// cacheLogPrefix returns a unified log prefix.
+func cacheLogPrefix(resourceName string) string {
+	lPrefix := fmt.Sprintf("resource:%s", resourceName)
+	return lPrefix
 }
- 
-var (
-	proxyArgs      ProxyArgs
-)
 
-const (
-	// MaxRetryInterval retry interval time when reconnect
-	MaxRetryInterval = time.Second * 30
+ //grpc连接建立位置，建立一次？
+	func fetch_cert(resourceName string) (secret *security.SecretItem, err error) {
+		log.Infof("------------------fetch_cert---------- %#v ----------\n", resourceName);
+	 	CSRSignAddress := env.Register("MESH_CONTROLLER", "istiod.istio-system.svc:15012", "").Get()
+	 	var	grpcConn	*grpc.ClientConn
+	 	var grpcclient   pb.IstioCertificateServiceClient
+		trustBundlePEM := []string{}
+	 	var rootCertPEM []byte
+	 	if grpcConn, err = nets.GrpcConnect(CSRSignAddress); err != nil {
+		 	return nil, fmt.Errorf("ads grpc connect failed: %v", err)
+	 	}
 
-	// MaxRetryCount retry max count when reconnect
-	MaxRetryCount = 3
+	 	secOpts := &security.Options{
+			CAEndpoint:                     caEndpointEnv,
+			CAProviderName:                 caProviderEnv,
+			PilotCertProvider:              PilotCertProvider,
+			OutputKeyCertToDir:             outputKeyCertToDir,
+			ProvCert:                       provCert,
+			ClusterID:                      clusterIDVar.Get(),
+			FileMountedCerts:               fileMountedCertsEnv,
+			WorkloadNamespace:              PodNamespaceVar.Get(),
+			ServiceAccount:                 serviceAccountVar.Get(),
+			XdsAuthProvider:                xdsAuthProvider.Get(),
+			TrustDomain:                    trustDomainEnv,
+			WorkloadRSAKeySize:             workloadRSAKeySizeEnv,
+			Pkcs8Keys:                      pkcs8KeysEnv,
+			ECCSigAlg:                      eccSigAlgEnv,
+			ECCCurve:                       eccCurvEnv,
+			SecretTTL:                      secretTTLEnv,
+			FileDebounceDuration:           fileDebounceDuration,
+			SecretRotationGracePeriodRatio: secretRotationGracePeriodRatioEnv,
+			STSPort:                        0,
+			CertSigner:                     certSigner.Get(),
+			CARootPath:                     CACertFilePath,
+			CertChainFilePath:              security.DefaultCertChainFilePath,
+			KeyFilePath:                    security.DefaultKeyFilePath,
+			RootCertFilePath:               security.DefaultRootCertFilePath,
+		}
+		grpcclient = pb.NewIstioCertificateServiceClient(grpcConn)
 
-//	credFetcherTypeEnv = "JWT"
-//	trustDomainEnv     = "cluster.local"
-	jwtPath            = "/var/run/secrets/tokens/istio-token"
-	rootCertPath       = "/var/run/secrets/istio/root-cert.pem"
-
-	KubeAppProberEnvName = "ISTIO_KUBE_APP_PROBERS"
-
-	ConfigPathDir = "./etc/istio/proxy"
+		tlsOpts = &TLSOptions{
+			RootCert:      rootCertPath,
+		}
+	 
+		citadelclient := CitadelClient{
+			tlsOpts:  tlsOpts,
+			client:   grpcclient,
+			conn:     grpcConn,
+			provider: NewCATokenProvider(secOpts),
+			opts:     secOpts,
+		}
 	
+
+	//生成構造CSR,
+	// TODO: ns和domain都不對，這裡獲取的是kmesh的，需要調整成pod的，原因是抄的istio代碼這裡是為自己生成證書，kmesh需要為pod生成證書
+		csrHostName := &spiffe.Identity{
+			TrustDomain:    secOpts.TrustDomain,
+			Namespace:      secOpts.WorkloadNamespace,
+			ServiceAccount: resourceName,
+		}
+
+		log.Infof("constructed host name for CSR: %s", csrHostName.String())
+
+		options := pkiutil.CertOptions{
+			Host:       csrHostName.String(),
+			RSAKeySize: secOpts.WorkloadRSAKeySize,
+			PKCS8Key:   secOpts.Pkcs8Keys,
+			ECSigAlg:   pkiutil.SupportedECSignatureAlgorithms(secOpts.ECCSigAlg),
+			ECCCurve:   pkiutil.SupportedEllipticCurves(secOpts.ECCCurve),
+		}
+		logPrefix := cacheLogPrefix(resourceName)
+
+		log.Infof("------------------GenCSR---------- %#v ----------\n", resourceName);
+		// Generate the cert/key, send CSR to CA.
+		csrPEM, keyPEM, err := pkiutil.GenCSR(options)
+		if err != nil {
+			log.Errorf("%s failed to generate key and certificate for CSR: %v", logPrefix, err)
+			return nil, err
+		}
+		
+		numOutgoingRequests.With(RequestType.Value(monitoring.CSR)).Increment()
+		certChainPEM, err := citadelclient.CSRSign(csrPEM, int64(secOpts.SecretTTL.Seconds()))
+		if err == nil {
+			trustBundlePEM, err = citadelclient.GetRootCertBundle()
+		}
 	
-)
+		certChain := concatCerts(certChainPEM)
 
+		var expireTime time.Time
+		// Cert expire time by default is createTime + sc.configOptions.SecretTTL.
+		// Istiod respects SecretTTL that passed to it and use it decide TTL of cert it issued.
+		// Some customer CA may override TTL param that's passed to it.
+		if expireTime, err = nodeagentutil.ParseCertAndGetExpiryTimestamp(certChain); err != nil {
+			log.Errorf("%s failed to extract expire time from server certificate in CSR response %+v: %v",
+				logPrefix, certChainPEM, err)
+			return nil, fmt.Errorf("failed to extract expire time from server certificate in CSR response: %v", err)
+		}
 
-//grpc连接建立位置，建立一次？
- func fetch_cert(resourceName string) (secret *security.SecretItem, err error) {
-	discoveryAddress := env.Register("MESH_CONTROLLER", "istiod.istio-system.svc:15012", "").Get()
-	var	grpcConn	*grpc.ClientConn
-	var client   pb.IstioCertificateServiceClient
-	if grpcConn, err = nets.GrpcConnect(discoveryAddress); err != nil {
-		return fmt.Errorf("ads grpc connect failed: %v", err)
-	}
-	client = pb.NewIstioCertificateServiceClient(grpcConn)
-
-/*	secOpts := &security.Options{
-		CAEndpoint:                     caEndpointEnv,
-		CAProviderName:                 caProviderEnv,
-		PilotCertProvider:              PilotCertProvider,
-		OutputKeyCertToDir:             outputKeyCertToDir,
-		ProvCert:                       provCert,
-		ClusterID:                      clusterIDVar.Get(),
-		FileMountedCerts:               fileMountedCertsEnv,
-		WorkloadNamespace:              PodNamespaceVar.Get(),
-		ServiceAccount:                 serviceAccountVar.Get(),
-		XdsAuthProvider:                xdsAuthProvider.Get(),
-		TrustDomain:                    trustDomainEnv,
-		WorkloadRSAKeySize:             workloadRSAKeySizeEnv,
-		Pkcs8Keys:                      pkcs8KeysEnv,
-		ECCSigAlg:                      eccSigAlgEnv,
-		ECCCurve:                       eccCurvEnv,
-		SecretTTL:                      secretTTLEnv,
-		FileDebounceDuration:           fileDebounceDuration,
-		SecretRotationGracePeriodRatio: secretRotationGracePeriodRatioEnv,
-		STSPort:                        0,
-		CertSigner:                     certSigner.Get(),
-		CARootPath:                     CACertFilePath,
-		CertChainFilePath:              security.DefaultCertChainFilePath,
-		KeyFilePath:                    security.DefaultKeyFilePath,
-		RootCertFilePath:               security.DefaultRootCertFilePath,
-	}
-*/
-	//secOpts, err := options.NewSecurityOptions(proxyConfig, proxyArgs.StsPort, proxyArgs.TokenManagerPlugin)
-
-
-
-//	caclient, err := citadel.NewCitadelClient(secOpts, tlsOpts)
-//	if err != nil {
-//		return nil, err
-//	}
-
-//	 client, err := cache.NewSecretManagerClient(caclient, secOpts)             // 传递需要的参数，将所需参数初始化好
-//	 if err != nil {
-//		log.Errorf("Error creating SecretManager client: %v", err)
-//	 }
-	tlsOpts = &citadel.TLSOptions{
-		RootCert:      rootCertPath,
-	}
-	
-	 ns, err := client.GenerateSecret(resourceName)
-
-     if err != nil {
-        log.Errorf("Error generating secret for resource %s: %v", resourceName, err)
-    }
-	 return ns, nil
- }
- 
- //有效期到期，提前30s检查并自动刷新
- func delayedTask(delaytime time.Time, resourceName string ) {
-	 var new_certs *security.SecretItem
-	 var err error
-	//找慕阳看一下，包含在删除workload，证书的逻辑中
-	 for {
-		<-time.After(time.Until(delaytime.Add(-30 * time.Second)))
-		if _, ok := certs_maps.Load(resourceName); !ok {
-			return
+		if len(trustBundlePEM) > 0 {
+			rootCertPEM = concatCerts(trustBundlePEM)
 		} else {
-			new_certs, err = fetch_cert(resourceName);
-			if err != nil {
-				//重新获取
-			}
+			// If CA Client has no explicit mechanism to retrieve CA root, infer it from the root of the certChain
+			rootCertPEM = []byte(certChainPEM[len(certChainPEM)-1])
 		}
-		// 检查 key 是否存在workload中，如果存在则刷新，否则放弃，如果本轮出现多线程误刷新，会在下一轮workload检查中将证书删除，所以无需加锁
-		_, ok := certs_maps.Load(resourceName);//需要修改成从cache中读取workload并判断
-		if ok {
-			certs_maps.Store(resourceName, *new_certs)
-			delaytime = new_certs.ExpireTime;
-		}
-	 }
- }
- 
- /*从通道中获取
-	 hashmap中检查
-	 检查有效期
-	 调用fetch_cert
-	 创建delay任务，到点自动执行
- */
- func Update_certs(resourceName string) {
-	 var new_certs *security.SecretItem
-	 var err error
- 
-	 //检查hashmap中是否存在
-	 if certs, ok := certs_maps.Load(resourceName); ok {
+		log.Infof("------------------rootCertPEM---------- %v\n", rootCertPEM);
+		log.Infof("------------------expireTime---------- %v\n", expireTime);
+		log.Infof("------------------keyPEM---------- %v\n", keyPEM);
+		log.Infof("------------------certChain---------- %v\n", certChain);
+		return &security.SecretItem{
+			CertificateChain: certChain,
+			PrivateKey:       keyPEM,
+			ResourceName:     resourceName,
+			CreatedTime:      time.Now(),
+			ExpireTime:       expireTime,
+			RootCert:         rootCertPEM,
+		}, nil
+	}
+  
+  //有效期到期，提前30s检查并自动刷新
+  func delayedTask(delaytime time.Time, resourceName string ) {
+	  var new_certs *security.SecretItem
+	  var err error
+	  log.Infof("------------------delayedTask--------------------\n");
+	 //找慕阳看一下，包含在删除workload，证书的逻辑中
+	  for {
+		 <-time.After(time.Until(delaytime.Add(-30 * time.Second)))
 
-		_certs := certs.(*security.SecretItem);
-		//_certs需要判空
-		if _certs == nil {
-			return
-		}
-		//检查有效期
-		 if _certs.ExpireTime.After(time.Now()) {
+		 if _, ok := certs_maps.Load(resourceName); !ok {
 			 return
 		 } else {
 			 new_certs, err = fetch_cert(resourceName);
@@ -350,25 +261,63 @@ const (
 				 //重新获取
 			 }
 		 }
- 
-	 } else {
-		 new_certs, err = fetch_cert(resourceName);
-		 if err != nil {
-			 //重新获取
+		 // 检查 key 是否存在workload中，如果存在则刷新，否则放弃，如果本轮出现多线程误刷新，会在下一轮workload检查中将证书删除，所以无需加锁
+		 _, ok := certs_maps.Load(resourceName);//需要修改成从cache中读取workload并判断
+		 if ok {
+			 certs_maps.Store(resourceName, *new_certs)
+			 delaytime = new_certs.ExpireTime;
 		 }
-	 }
-	 //获取逻辑判空
-	 if new_certs != nil{
-		certs_maps.Store(resourceName, *new_certs)
-		delaytime := new_certs.ExpireTime;
-		go delayedTask(delaytime, resourceName);
-	 }
+	  }
+  }
+  
+  /*从通道中获取
+	  hashmap中检查
+	  检查有效期
+	  调用fetch_cert
+	  创建delay任务，到点自动执行
+  */
+  func Update_certs(resourceName string) {
+	  var new_certs *security.SecretItem
+	  var err error
 
- }
+  	  log.Infof("------------------Update_certs--------------------\n");
+
+	  //检查hashmap中是否存在
+	  if certs, ok := certs_maps.Load(resourceName); ok {
  
+		 _certs := certs.(*security.SecretItem);
+		 //_certs需要判空
+		 if _certs == nil {
+			 return
+		 }
+		 //检查有效期
+		  if _certs.ExpireTime.After(time.Now()) {
+			  return
+		  } else {
+			  new_certs, err = fetch_cert(resourceName);
+			  if err != nil {
+				  //重新获取
+			  }
+		  }
+  
+	  } else {
+		  new_certs, err = fetch_cert(resourceName);
+		  if err != nil {
+			  //重新获取
+		  }
+	  }
+	  //获取逻辑判空
+	  if new_certs != nil{
+		 certs_maps.Store(resourceName, *new_certs)
+		 delaytime := new_certs.ExpireTime;
+		 go delayedTask(delaytime, resourceName);
+	  }
  
- func Delete_certs(resourceName string) {
-	 if _, ok := certs_maps.Load(resourceName); ok {
-		certs_maps.Delete(resourceName)
-	 }
- }
+  }
+  
+  
+  func Delete_certs(resourceName string) {
+	  if _, ok := certs_maps.Load(resourceName); ok {
+		 certs_maps.Delete(resourceName)
+	  }
+  }
