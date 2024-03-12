@@ -1,323 +1,42 @@
-/*
- * Copyright 2024 The Kmesh Authors.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at:
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+#
+# Dockerfile for building openEuler kmesh docker image.
+# 
+# Usage:
+# docker build -f kmesh.dockerfile -t kmesh:latest .
+# docker run -itd --privileged=true -v /usr/src:/usr/src -v /usr/include/linux/bpf.h:/kmesh/config/linux-bpf.h -v /etc/cni/net.d:/etc/cni/net.d -v /opt/cni/bin:/opt/cni/bin -v /mnt:/mnt -v /sys/fs/bpf:/sys/fs/bpf -v /lib/modules:/lib/modules --name kmesh kmesh:latest
+#
 
- * Author: lec-bit
- * Create: 2024-02-27
- */
+# base image
+FROM openeuler/openeuler:23.09
 
-package kmeshsecurity
+RUN sed -i '/metalink/d' /etc/yum.repos.d/*.repo
+RUN sed -i '/metadata_expire/d' /etc/yum.repos.d/*.repo
+RUN sed -i 's/repo.openeuler.org/7.223.199.227\/openeuler/g' /etc/yum.repos.d/*.repo
 
-import (
-	"bytes"
-	"fmt"
-	"strings"
-	"sync"
-	"time"
+# Setup Go
+COPY --from=golang:1.22.1 /usr/local/go/ /usr/local/go/
+RUN mkdir -p /go
+ENV GOROOT /usr/local/go
+ENV GOPATH /go
+ENV PATH "${GOROOT}/bin:${GOPATH}/bin:${PATH}"
 
-	"google.golang.org/grpc"
-	pb "istio.io/api/security/v1alpha1"
-	"istio.io/istio/pkg/env"
-	"istio.io/istio/pkg/security"
-	"istio.io/istio/pkg/spiffe"
-	"istio.io/istio/security/pkg/monitoring"
-	nodeagentutil "istio.io/istio/security/pkg/nodeagent/util"
-	pkiutil "istio.io/istio/security/pkg/pki/util"
-	"kmesh.net/kmesh/pkg/logger"
-	"kmesh.net/kmesh/pkg/nets"
-)
-  
-  var certs_maps sync.Map
- 
-  var log = logger.NewLoggerField("kmeshsecurity")
- 
-  var CACertFilePath = ""
- // concatCerts concatenates PEM certificates, making sure each one starts on a new line
-func concatCerts(certsPEM []string) []byte {
-	if len(certsPEM) == 0 {
-		return []byte{}
-	}
-	var certChain bytes.Buffer
-	for i, c := range certsPEM {
-		certChain.WriteString(c)
-		if i < len(certsPEM)-1 && !strings.HasSuffix(c, "\n") {
-			certChain.WriteString("\n")
-		}
-	}
-	return certChain.Bytes()
-}
-  
-  // ProxyArgs provides all of the configuration parameters for the Pilot proxy.
- type ProxyArgs struct {
-	 DNSDomain          string
-	 StsPort            int
-	 TokenManagerPlugin string
- 
-	 MeshConfigFile string
- 
-	 // proxy config flags (named identically)
-	 ServiceCluster         string
-	 ProxyLogLevel          string
-	 ProxyComponentLogLevel string
-	 Concurrency            int
-	 TemplateFile           string
-	 OutlierLogPath         string
- 
-	 PodName      string
-	 PodNamespace string
- 
-	 // enableProfiling enables profiling via web interface host:port/debug/pprof/
-	 EnableProfiling bool
- }
- 
- 
- const (
-	 DefaultPurgeInterval         = 1 * time.Hour
-	 DefaultModuleExpiry          = 24 * time.Hour
-	 DefaultHTTPRequestTimeout    = 15 * time.Second
-	 DefaultHTTPRequestMaxRetries = 5
- )
- 
-  var tlsOpts *TLSOptions
-  var 	PilotCertProvider = env.Register("PILOT_CERT_PROVIDER", "istiod",
-  "The provider of Pilot DNS certificate.").Get()
- 
-  type entry struct {
-	 value interface{}
-	 mu    sync.Mutex
- }
-  
- var (
-	 proxyArgs      ProxyArgs
- )
- 
- const (
-	 // MaxRetryInterval retry interval time when reconnect
-	 MaxRetryInterval = time.Second * 30
- 
-	 // MaxRetryCount retry max count when reconnect
-	 MaxRetryCount = 3
- 
- //	credFetcherTypeEnv = "JWT"
- //	trustDomainEnv     = "cluster.local"
-	 jwtPath            = "/var/run/secrets/tokens/istio-token"
-	 rootCertPath       = "/var/run/secrets/istio/root-cert.pem"
- 
-	 KubeAppProberEnvName = "ISTIO_KUBE_APP_PROBERS"
- 
-	 ConfigPathDir = "./etc/istio/proxy"
-	 
- )
- 
-// cacheLogPrefix returns a unified log prefix.
-func cacheLogPrefix(resourceName string) string {
-	lPrefix := fmt.Sprintf("resource:%s", resourceName)
-	return lPrefix
-}
+WORKDIR /prepare
+COPY kmesh_compile_env_pre.sh ./
+COPY go.mod ./
 
- //grpc连接建立位置，建立一次？
-	func fetch_cert(resourceName string) (secret *security.SecretItem, err error) {
-		log.Infof("------------------fetch_cert---------- %#v ----------\n", resourceName);
-	 	CSRSignAddress := env.Register("MESH_CONTROLLER", "istiod.istio-system.svc:15012", "").Get()
-	 	var	grpcConn	*grpc.ClientConn
-	 	var grpcclient   pb.IstioCertificateServiceClient
-		trustBundlePEM := []string{}
-	 	var rootCertPEM []byte
-	 	if grpcConn, err = nets.GrpcConnect(CSRSignAddress); err != nil {
-		 	return nil, fmt.Errorf("ads grpc connect failed: %v", err)
-	 	}
+# install pkg dependencies 
+# RUN yum install -y kmod util-linux
+# install package in online-compile image
+RUN yum install -y kmod \
+    && yum install -y util-linux
 
-	 	secOpts := &security.Options{
-			CAEndpoint:                     caEndpointEnv,
-			CAProviderName:                 caProviderEnv,
-			PilotCertProvider:              PilotCertProvider,
-			OutputKeyCertToDir:             outputKeyCertToDir,
-			ProvCert:                       provCert,
-			ClusterID:                      clusterIDVar.Get(),
-			FileMountedCerts:               fileMountedCertsEnv,
-			WorkloadNamespace:              PodNamespaceVar.Get(),
-			ServiceAccount:                 serviceAccountVar.Get(),
-			XdsAuthProvider:                xdsAuthProvider.Get(),
-			TrustDomain:                    trustDomainEnv,
-			WorkloadRSAKeySize:             workloadRSAKeySizeEnv,
-			Pkcs8Keys:                      pkcs8KeysEnv,
-			ECCSigAlg:                      eccSigAlgEnv,
-			ECCCurve:                       eccCurvEnv,
-			SecretTTL:                      secretTTLEnv,
-			FileDebounceDuration:           fileDebounceDuration,
-			SecretRotationGracePeriodRatio: secretRotationGracePeriodRatioEnv,
-			STSPort:                        0,
-			CertSigner:                     certSigner.Get(),
-			CARootPath:                     CACertFilePath,
-			CertChainFilePath:              security.DefaultCertChainFilePath,
-			KeyFilePath:                    security.DefaultKeyFilePath,
-			RootCertFilePath:               security.DefaultRootCertFilePath,
-		}
-		grpcclient = pb.NewIstioCertificateServiceClient(grpcConn)
+RUN go env -w GO111MODULE=on \
+    && go env -w  GOPROXY=http://mirrors.tools.huawei.com/goproxy \
+    && export GONOSUMDB=* \
+    && go mod download \
+    && go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.32.0
 
-		tlsOpts = &TLSOptions{
-			RootCert:      rootCertPath,
-		}
-	 
-		citadelclient := CitadelClient{
-			tlsOpts:  tlsOpts,
-			client:   grpcclient,
-			conn:     grpcConn,
-			provider: NewCATokenProvider(secOpts),
-			opts:     secOpts,
-		}
-	
+RUN bash kmesh_compile_env_pre.sh
 
-	//生成構造CSR,
-	// TODO: ns和domain都不對，這裡獲取的是kmesh的，需要調整成pod的，原因是抄的istio代碼這裡是為自己生成證書，kmesh需要為pod生成證書
-		csrHostName := &spiffe.Identity{
-			TrustDomain:    secOpts.TrustDomain,
-			Namespace:      secOpts.WorkloadNamespace,
-			ServiceAccount: resourceName,
-		}
-
-		log.Infof("constructed host name for CSR: %s", csrHostName.String())
-
-		options := pkiutil.CertOptions{
-			Host:       csrHostName.String(),
-			RSAKeySize: secOpts.WorkloadRSAKeySize,
-			PKCS8Key:   secOpts.Pkcs8Keys,
-			ECSigAlg:   pkiutil.SupportedECSignatureAlgorithms(secOpts.ECCSigAlg),
-			ECCCurve:   pkiutil.SupportedEllipticCurves(secOpts.ECCCurve),
-		}
-		logPrefix := cacheLogPrefix(resourceName)
-
-		log.Infof("------------------GenCSR---------- %#v ----------\n", resourceName);
-		// Generate the cert/key, send CSR to CA.
-		csrPEM, keyPEM, err := pkiutil.GenCSR(options)
-		if err != nil {
-			log.Errorf("%s failed to generate key and certificate for CSR: %v", logPrefix, err)
-			return nil, err
-		}
-		
-		numOutgoingRequests.With(RequestType.Value(monitoring.CSR)).Increment()
-		certChainPEM, err := citadelclient.CSRSign(csrPEM, int64(secOpts.SecretTTL.Seconds()))
-		if err == nil {
-			trustBundlePEM, err = citadelclient.GetRootCertBundle()
-		}
-	
-		certChain := concatCerts(certChainPEM)
-
-		var expireTime time.Time
-		// Cert expire time by default is createTime + sc.configOptions.SecretTTL.
-		// Istiod respects SecretTTL that passed to it and use it decide TTL of cert it issued.
-		// Some customer CA may override TTL param that's passed to it.
-		if expireTime, err = nodeagentutil.ParseCertAndGetExpiryTimestamp(certChain); err != nil {
-			log.Errorf("%s failed to extract expire time from server certificate in CSR response %+v: %v",
-				logPrefix, certChainPEM, err)
-			return nil, fmt.Errorf("failed to extract expire time from server certificate in CSR response: %v", err)
-		}
-
-		if len(trustBundlePEM) > 0 {
-			rootCertPEM = concatCerts(trustBundlePEM)
-		} else {
-			// If CA Client has no explicit mechanism to retrieve CA root, infer it from the root of the certChain
-			rootCertPEM = []byte(certChainPEM[len(certChainPEM)-1])
-		}
-		log.Infof("------------------rootCertPEM---------- %v\n", rootCertPEM);
-		log.Infof("------------------expireTime---------- %v\n", expireTime);
-		log.Infof("------------------keyPEM---------- %v\n", keyPEM);
-		log.Infof("------------------certChain---------- %v\n", certChain);
-		return &security.SecretItem{
-			CertificateChain: certChain,
-			PrivateKey:       keyPEM,
-			ResourceName:     resourceName,
-			CreatedTime:      time.Now(),
-			ExpireTime:       expireTime,
-			RootCert:         rootCertPEM,
-		}, nil
-	}
-  
-  //有效期到期，提前30s检查并自动刷新
-  func delayedTask(delaytime time.Time, resourceName string ) {
-	  var new_certs *security.SecretItem
-	  var err error
-	  log.Infof("------------------delayedTask--------------------\n");
-	 //找慕阳看一下，包含在删除workload，证书的逻辑中
-	  for {
-		 <-time.After(time.Until(delaytime.Add(-30 * time.Second)))
-
-		 if _, ok := certs_maps.Load(resourceName); !ok {
-			 return
-		 } else {
-			 new_certs, err = fetch_cert(resourceName);
-			 if err != nil {
-				 //重新获取
-			 }
-		 }
-		 // 检查 key 是否存在workload中，如果存在则刷新，否则放弃，如果本轮出现多线程误刷新，会在下一轮workload检查中将证书删除，所以无需加锁
-		 _, ok := certs_maps.Load(resourceName);//需要修改成从cache中读取workload并判断
-		 if ok {
-			 certs_maps.Store(resourceName, *new_certs)
-			 delaytime = new_certs.ExpireTime;
-		 }
-	  }
-  }
-  
-  /*从通道中获取
-	  hashmap中检查
-	  检查有效期
-	  调用fetch_cert
-	  创建delay任务，到点自动执行
-  */
-  func Update_certs(resourceName string) {
-	  var new_certs *security.SecretItem
-	  var err error
-
-  	  log.Infof("------------------Update_certs--------------------\n");
-
-	  //检查hashmap中是否存在
-	  if certs, ok := certs_maps.Load(resourceName); ok {
- 
-		 _certs := certs.(*security.SecretItem);
-		 //_certs需要判空
-		 if _certs == nil {
-			 return
-		 }
-		 //检查有效期
-		  if _certs.ExpireTime.After(time.Now()) {
-			  return
-		  } else {
-			  new_certs, err = fetch_cert(resourceName);
-			  if err != nil {
-				  //重新获取
-			  }
-		  }
-  
-	  } else {
-		  new_certs, err = fetch_cert(resourceName);
-		  if err != nil {
-			  //重新获取
-		  }
-	  }
-	  //获取逻辑判空
-	  if new_certs != nil{
-		 certs_maps.Store(resourceName, *new_certs)
-		 delaytime := new_certs.ExpireTime;
-		 go delayedTask(delaytime, resourceName);
-	  }
- 
-  }
-  
-  
-  func Delete_certs(resourceName string) {
-	  if _, ok := certs_maps.Load(resourceName); ok {
-		 certs_maps.Delete(resourceName)
-	  }
-  }
+# container work directory
+WORKDIR /kmesh
