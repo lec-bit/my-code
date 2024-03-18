@@ -17,3 +17,8 @@ grpc连接无消息可能会自动断开，需要考虑重连
 做个测试，看看go协程占用资源情况；看看有无更好的方法
 
 使用优先队列，创建定时器，根据队列中定时器优先级弹出，并刷新证书
+
+
+RUN sed -i '/metalink/d' /etc/yum.repos.d/*.repo
+RUN sed -i '/metadata_expire/d' /etc/yum.repos.d/*.repo
+RUN sed -i 's/repo.openeuler.org/7.223.199.227\/openeuler/g' /etc/yum.repos.d/*.repo
