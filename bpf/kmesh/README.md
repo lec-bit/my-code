@@ -1,3 +1,0 @@
-# BPF-KMESH
-## Usage Tutorial
-
