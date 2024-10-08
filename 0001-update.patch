@@ -1,0 +1,125 @@
+From 5b7e967ed5090491357ed756140797464a3a451a Mon Sep 17 00:00:00 2001
+From: lec-bit <glfhmzmy@126.com>
+Date: Tue, 8 Oct 2024 16:00:35 +0800
+Subject: [PATCH] update
+
+Signed-off-by: lec-bit <glfhmzmy@126.com>
+---
+ pkg/bpf/ads/loader_enhanced.go | 28 ++++++++++------------------
+ pkg/bpf/ads/sock_ops.go        |  3 ++-
+ pkg/bpf/ads/trace_point.go     |  3 ++-
+ 3 files changed, 14 insertions(+), 20 deletions(-)
+
+diff --git a/pkg/bpf/ads/loader_enhanced.go b/pkg/bpf/ads/loader_enhanced.go
+index c800fefe..13b9808e 100644
+--- a/pkg/bpf/ads/loader_enhanced.go
++++ b/pkg/bpf/ads/loader_enhanced.go
+@@ -32,8 +32,11 @@ import (
+ 
+ 	"kmesh.net/kmesh/daemon/options"
+ 	"kmesh.net/kmesh/pkg/bpf/restart"
++	"kmesh.net/kmesh/pkg/logger"
+ )
+ 
++var log = logger.NewLoggerScope("bpf_ads")
++
+ type BpfAds struct {
+ 	TracePoint BpfTracePoint
+ 	SockConn   BpfSockConn
+@@ -54,7 +57,9 @@ func NewBpfAds(cfg *options.BpfConfig) (*BpfAds, error) {
+ 	return sc, nil
+ }
+ 
+-func (sc *BpfAds) Start() {
++func (sc *BpfAds) Start() error {
++	var ve *ebpf.VerifierError
++
+ 	if err := sc.Load(); err != nil {
+ 		if errors.As(err, &ve) {
+ 			return fmt.Errorf("bpf Load failed: %+v", ve)
+@@ -74,14 +79,16 @@ func (sc *BpfAds) Start() {
+ 	if ret != 0 {
+ 		return fmt.Errorf("deserial_init failed:%v", ret)
+ 	}
++	return nil
+ }
+ 
+-func (sc *BpfAds) Stop() {
++func (sc *BpfAds) Stop() error {
+ 	C.deserial_uninit(false)
+ 	if err := sc.Detach(); err != nil {
+ 		log.Errorf("failed detach when stop kmesh, err: %v", err)
+-		return
++		return err
+ 	}
++	return nil
+ }
+ 
+ func (sc *BpfAds) GetBpfLogLevelMap() *ebpf.Map {
+@@ -163,21 +170,6 @@ func (sc *BpfAds) Attach() error {
+ 	return nil
+ }
+ 
+-func (sc *BpfAds) close() error {
+-	if err := sc.SockOps.close(); err != nil {
+-		return err
+-	}
+-
+-	if err := sc.SockConn.close(); err != nil {
+-		return err
+-	}
+-
+-	if err := sc.TracePoint.close(); err != nil {
+-		return err
+-	}
+-	return nil
+-}
+-
+ func (sc *BpfAds) Detach() error {
+ 	if err := sc.TracePoint.Detach(); err != nil {
+ 		return err
+diff --git a/pkg/bpf/ads/sock_ops.go b/pkg/bpf/ads/sock_ops.go
+index 20c2d8c2..22ec2d3d 100644
+--- a/pkg/bpf/ads/sock_ops.go
++++ b/pkg/bpf/ads/sock_ops.go
+@@ -27,6 +27,7 @@ import (
+ 	"github.com/cilium/ebpf"
+ 	"github.com/cilium/ebpf/link"
+ 
++	"kmesh.net/kmesh/bpf/kmesh/bpf2go"
+ 	"kmesh.net/kmesh/daemon/options"
+ 	"kmesh.net/kmesh/pkg/bpf/utils"
+ 	helper "kmesh.net/kmesh/pkg/utils"
+@@ -82,7 +83,7 @@ func (sc *BpfSockOps) loadKmeshSockopsObjects() (*ebpf.CollectionSpec, error) {
+ 	}
+ 
+ 	value := reflect.ValueOf(sc.KmeshSockopsObjects.KmeshSockopsPrograms)
+-	if err = pinPrograms(&value, sc.Info.BpfFsPath); err != nil {
++	if err = utils.PinPrograms(&value, sc.Info.BpfFsPath); err != nil {
+ 		return nil, err
+ 	}
+ 
+diff --git a/pkg/bpf/ads/trace_point.go b/pkg/bpf/ads/trace_point.go
+index a1c9b670..72e2849b 100644
+--- a/pkg/bpf/ads/trace_point.go
++++ b/pkg/bpf/ads/trace_point.go
+@@ -23,6 +23,7 @@ import (
+ 	"github.com/cilium/ebpf"
+ 	"github.com/cilium/ebpf/link"
+ 
++	"kmesh.net/kmesh/bpf/kmesh/bpf2go"
+ 	"kmesh.net/kmesh/daemon/options"
+ 	helper "kmesh.net/kmesh/pkg/utils"
+ )
+@@ -90,7 +91,7 @@ func (sc *BpfTracePoint) Attach() error {
+ }
+ 
+ func (sc *BpfTracePoint) Detach() error {
+-	if err := sc.KmeshTracePointObjects.Close()(); err != nil {
++	if err := sc.KmeshTracePointObjects.Close(); err != nil {
+ 		return err
+ 	}
+ 
+-- 
+2.39.1
+
