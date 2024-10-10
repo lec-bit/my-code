@@ -37,6 +37,26 @@ type KmeshCgroupSockWorkloadManagerKey struct {
 
 type KmeshCgroupSockWorkloadManagerValueT struct{ IsBypassed uint32 }
 
+type KmeshCgroupSockWorkloadMetricData struct {
+	Direction     uint32
+	ConnOpen      uint32
+	ConnClose     uint32
+	ConnFailed    uint32
+	SentBytes     uint32
+	ReceivedBytes uint32
+}
+
+type KmeshCgroupSockWorkloadMetricKey struct {
+	SrcIp struct {
+		Ip4 uint32
+		_   [12]byte
+	}
+	DstIp struct {
+		Ip4 uint32
+		_   [12]byte
+	}
+}
+
 type KmeshCgroupSockWorkloadSockStorageData struct {
 	ConnectNs      uint64
 	Direction      uint8
@@ -100,11 +120,13 @@ type KmeshCgroupSockWorkloadMapSpecs struct {
 	KmeshFrontend     *ebpf.MapSpec `ebpf:"kmesh_frontend"`
 	KmeshManage       *ebpf.MapSpec `ebpf:"kmesh_manage"`
 	KmeshService      *ebpf.MapSpec `ebpf:"kmesh_service"`
+	MapOfAccessLog    *ebpf.MapSpec `ebpf:"map_of_access_log"`
 	MapOfAuth         *ebpf.MapSpec `ebpf:"map_of_auth"`
 	MapOfDstInfo      *ebpf.MapSpec `ebpf:"map_of_dst_info"`
+	MapOfMetricNotify *ebpf.MapSpec `ebpf:"map_of_metric_notify"`
+	MapOfMetrics      *ebpf.MapSpec `ebpf:"map_of_metrics"`
 	MapOfSockStorage  *ebpf.MapSpec `ebpf:"map_of_sock_storage"`
 	MapOfTailCallProg *ebpf.MapSpec `ebpf:"map_of_tail_call_prog"`
-	MapOfTcpInfo      *ebpf.MapSpec `ebpf:"map_of_tcp_info"`
 	MapOfTuple        *ebpf.MapSpec `ebpf:"map_of_tuple"`
 	TmpBuf            *ebpf.MapSpec `ebpf:"tmp_buf"`
 	TmpLogBuf         *ebpf.MapSpec `ebpf:"tmp_log_buf"`
@@ -136,11 +158,13 @@ type KmeshCgroupSockWorkloadMaps struct {
 	KmeshFrontend     *ebpf.Map `ebpf:"kmesh_frontend"`
 	KmeshManage       *ebpf.Map `ebpf:"kmesh_manage"`
 	KmeshService      *ebpf.Map `ebpf:"kmesh_service"`
+	MapOfAccessLog    *ebpf.Map `ebpf:"map_of_access_log"`
 	MapOfAuth         *ebpf.Map `ebpf:"map_of_auth"`
 	MapOfDstInfo      *ebpf.Map `ebpf:"map_of_dst_info"`
+	MapOfMetricNotify *ebpf.Map `ebpf:"map_of_metric_notify"`
+	MapOfMetrics      *ebpf.Map `ebpf:"map_of_metrics"`
 	MapOfSockStorage  *ebpf.Map `ebpf:"map_of_sock_storage"`
 	MapOfTailCallProg *ebpf.Map `ebpf:"map_of_tail_call_prog"`
-	MapOfTcpInfo      *ebpf.Map `ebpf:"map_of_tcp_info"`
 	MapOfTuple        *ebpf.Map `ebpf:"map_of_tuple"`
 	TmpBuf            *ebpf.Map `ebpf:"tmp_buf"`
 	TmpLogBuf         *ebpf.Map `ebpf:"tmp_log_buf"`
@@ -155,11 +179,13 @@ func (m *KmeshCgroupSockWorkloadMaps) Close() error {
 		m.KmeshFrontend,
 		m.KmeshManage,
 		m.KmeshService,
+		m.MapOfAccessLog,
 		m.MapOfAuth,
 		m.MapOfDstInfo,
+		m.MapOfMetricNotify,
+		m.MapOfMetrics,
 		m.MapOfSockStorage,
 		m.MapOfTailCallProg,
-		m.MapOfTcpInfo,
 		m.MapOfTuple,
 		m.TmpBuf,
 		m.TmpLogBuf,

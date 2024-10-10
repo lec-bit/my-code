@@ -37,6 +37,26 @@ type KmeshSockopsWorkloadManagerKey struct {
 
 type KmeshSockopsWorkloadManagerValueT struct{ IsBypassed uint32 }
 
+type KmeshSockopsWorkloadMetricData struct {
+	Direction     uint32
+	ConnOpen      uint32
+	ConnClose     uint32
+	ConnFailed    uint32
+	SentBytes     uint32
+	ReceivedBytes uint32
+}
+
+type KmeshSockopsWorkloadMetricKey struct {
+	SrcIp struct {
+		Ip4 uint32
+		_   [12]byte
+	}
+	DstIp struct {
+		Ip4 uint32
+		_   [12]byte
+	}
+}
+
 type KmeshSockopsWorkloadSockStorageData struct {
 	ConnectNs      uint64
 	Direction      uint8
@@ -92,21 +112,23 @@ type KmeshSockopsWorkloadProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type KmeshSockopsWorkloadMapSpecs struct {
-	BpfLogLevel      *ebpf.MapSpec `ebpf:"bpf_log_level"`
-	KmeshBackend     *ebpf.MapSpec `ebpf:"kmesh_backend"`
-	KmeshEndpoint    *ebpf.MapSpec `ebpf:"kmesh_endpoint"`
-	KmeshEvents      *ebpf.MapSpec `ebpf:"kmesh_events"`
-	KmeshFrontend    *ebpf.MapSpec `ebpf:"kmesh_frontend"`
-	KmeshManage      *ebpf.MapSpec `ebpf:"kmesh_manage"`
-	KmeshService     *ebpf.MapSpec `ebpf:"kmesh_service"`
-	MapOfAuth        *ebpf.MapSpec `ebpf:"map_of_auth"`
-	MapOfDstInfo     *ebpf.MapSpec `ebpf:"map_of_dst_info"`
-	MapOfKmeshSocket *ebpf.MapSpec `ebpf:"map_of_kmesh_socket"`
-	MapOfSockStorage *ebpf.MapSpec `ebpf:"map_of_sock_storage"`
-	MapOfTcpInfo     *ebpf.MapSpec `ebpf:"map_of_tcp_info"`
-	MapOfTuple       *ebpf.MapSpec `ebpf:"map_of_tuple"`
-	TmpBuf           *ebpf.MapSpec `ebpf:"tmp_buf"`
-	TmpLogBuf        *ebpf.MapSpec `ebpf:"tmp_log_buf"`
+	BpfLogLevel       *ebpf.MapSpec `ebpf:"bpf_log_level"`
+	KmeshBackend      *ebpf.MapSpec `ebpf:"kmesh_backend"`
+	KmeshEndpoint     *ebpf.MapSpec `ebpf:"kmesh_endpoint"`
+	KmeshEvents       *ebpf.MapSpec `ebpf:"kmesh_events"`
+	KmeshFrontend     *ebpf.MapSpec `ebpf:"kmesh_frontend"`
+	KmeshManage       *ebpf.MapSpec `ebpf:"kmesh_manage"`
+	KmeshService      *ebpf.MapSpec `ebpf:"kmesh_service"`
+	MapOfAccessLog    *ebpf.MapSpec `ebpf:"map_of_access_log"`
+	MapOfAuth         *ebpf.MapSpec `ebpf:"map_of_auth"`
+	MapOfDstInfo      *ebpf.MapSpec `ebpf:"map_of_dst_info"`
+	MapOfKmeshSocket  *ebpf.MapSpec `ebpf:"map_of_kmesh_socket"`
+	MapOfMetricNotify *ebpf.MapSpec `ebpf:"map_of_metric_notify"`
+	MapOfMetrics      *ebpf.MapSpec `ebpf:"map_of_metrics"`
+	MapOfSockStorage  *ebpf.MapSpec `ebpf:"map_of_sock_storage"`
+	MapOfTuple        *ebpf.MapSpec `ebpf:"map_of_tuple"`
+	TmpBuf            *ebpf.MapSpec `ebpf:"tmp_buf"`
+	TmpLogBuf         *ebpf.MapSpec `ebpf:"tmp_log_buf"`
 }
 
 // KmeshSockopsWorkloadObjects contains all objects after they have been loaded into the kernel.
@@ -128,21 +150,23 @@ func (o *KmeshSockopsWorkloadObjects) Close() error {
 //
 // It can be passed to LoadKmeshSockopsWorkloadObjects or ebpf.CollectionSpec.LoadAndAssign.
 type KmeshSockopsWorkloadMaps struct {
-	BpfLogLevel      *ebpf.Map `ebpf:"bpf_log_level"`
-	KmeshBackend     *ebpf.Map `ebpf:"kmesh_backend"`
-	KmeshEndpoint    *ebpf.Map `ebpf:"kmesh_endpoint"`
-	KmeshEvents      *ebpf.Map `ebpf:"kmesh_events"`
-	KmeshFrontend    *ebpf.Map `ebpf:"kmesh_frontend"`
-	KmeshManage      *ebpf.Map `ebpf:"kmesh_manage"`
-	KmeshService     *ebpf.Map `ebpf:"kmesh_service"`
-	MapOfAuth        *ebpf.Map `ebpf:"map_of_auth"`
-	MapOfDstInfo     *ebpf.Map `ebpf:"map_of_dst_info"`
-	MapOfKmeshSocket *ebpf.Map `ebpf:"map_of_kmesh_socket"`
-	MapOfSockStorage *ebpf.Map `ebpf:"map_of_sock_storage"`
-	MapOfTcpInfo     *ebpf.Map `ebpf:"map_of_tcp_info"`
-	MapOfTuple       *ebpf.Map `ebpf:"map_of_tuple"`
-	TmpBuf           *ebpf.Map `ebpf:"tmp_buf"`
-	TmpLogBuf        *ebpf.Map `ebpf:"tmp_log_buf"`
+	BpfLogLevel       *ebpf.Map `ebpf:"bpf_log_level"`
+	KmeshBackend      *ebpf.Map `ebpf:"kmesh_backend"`
+	KmeshEndpoint     *ebpf.Map `ebpf:"kmesh_endpoint"`
+	KmeshEvents       *ebpf.Map `ebpf:"kmesh_events"`
+	KmeshFrontend     *ebpf.Map `ebpf:"kmesh_frontend"`
+	KmeshManage       *ebpf.Map `ebpf:"kmesh_manage"`
+	KmeshService      *ebpf.Map `ebpf:"kmesh_service"`
+	MapOfAccessLog    *ebpf.Map `ebpf:"map_of_access_log"`
+	MapOfAuth         *ebpf.Map `ebpf:"map_of_auth"`
+	MapOfDstInfo      *ebpf.Map `ebpf:"map_of_dst_info"`
+	MapOfKmeshSocket  *ebpf.Map `ebpf:"map_of_kmesh_socket"`
+	MapOfMetricNotify *ebpf.Map `ebpf:"map_of_metric_notify"`
+	MapOfMetrics      *ebpf.Map `ebpf:"map_of_metrics"`
+	MapOfSockStorage  *ebpf.Map `ebpf:"map_of_sock_storage"`
+	MapOfTuple        *ebpf.Map `ebpf:"map_of_tuple"`
+	TmpBuf            *ebpf.Map `ebpf:"tmp_buf"`
+	TmpLogBuf         *ebpf.Map `ebpf:"tmp_log_buf"`
 }
 
 func (m *KmeshSockopsWorkloadMaps) Close() error {
@@ -154,11 +178,13 @@ func (m *KmeshSockopsWorkloadMaps) Close() error {
 		m.KmeshFrontend,
 		m.KmeshManage,
 		m.KmeshService,
+		m.MapOfAccessLog,
 		m.MapOfAuth,
 		m.MapOfDstInfo,
 		m.MapOfKmeshSocket,
+		m.MapOfMetricNotify,
+		m.MapOfMetrics,
 		m.MapOfSockStorage,
-		m.MapOfTcpInfo,
 		m.MapOfTuple,
 		m.TmpBuf,
 		m.TmpLogBuf,

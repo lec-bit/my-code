@@ -1,5 +1,5 @@
 /*
- * Copyright The Kmesh Authors.
+ * Copyright 2024 The Kmesh Authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,10 +18,14 @@
 package bpf2go
 
 // go run github.com/cilium/ebpf/cmd/bpf2go --help
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang  --cflags $EXTRA_CFLAGS --cflags $EXTRA_CDEFINE KmeshCgroupSock ../ads/cgroup_sock.c -- -I../ads/include -I../../include -I../../../api/v2-c -DCGROUP_SOCK_MANAGE
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package bpf2gocgroup -output-dir /usr/share/kmesh -output-stem KmeshCgroupSock -cc clang  --cflags $EXTRA_CFLAGS --cflags $EXTRA_CDEFINE KmeshCgroupSock ../ads/cgroup_sock.c -- -I../ads/include -I../../include -I../../../api/v2-c -DCGROUP_SOCK_MANAGE 
+
+
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang  --cflags $EXTRA_CFLAGS --cflags $EXTRA_CDEFINE KmeshCgroupSockWorkload ../workload/cgroup_sock.c -- -I../workload/include -I../../include -I../probes
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang  --cflags $EXTRA_CFLAGS --cflags $EXTRA_CDEFINE KmeshSockops ../ads/sockops.c -- -I../ads/include -I../../include -I../../../api/v2-c
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang  --cflags $EXTRA_CFLAGS --cflags $EXTRA_CDEFINE KmeshTracePoint ../ads/tracepoint.c -- -I../ads/include -I../../include
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang  --cflags $EXTRA_CFLAGS --cflags $EXTRA_CDEFINE KmeshSockopsWorkload ../workload/sockops.c -- -I../workload/include -I../../include -I../probes
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang  --cflags $EXTRA_CFLAGS --cflags $EXTRA_CDEFINE KmeshXDPAuth ../workload/xdp.c -- -I../workload/include -I../../include -I../../../api/v2-c
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang  --cflags $EXTRA_CFLAGS --cflags $EXTRA_CDEFINE KmeshXDPAuth ../workload/xdp.c -- -I../workload/include -I../../include
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang  --cflags $EXTRA_CFLAGS --cflags $EXTRA_CDEFINE KmeshSendmsg ../workload/sendmsg.c -- -I../workload/include -I../../include
+
+

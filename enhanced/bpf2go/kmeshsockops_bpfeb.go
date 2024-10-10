@@ -20,18 +20,6 @@ type KmeshSockopsLogEvent struct {
 	_   [1]byte
 }
 
-type KmeshSockopsManagerKey struct {
-	NetnsCookie uint64
-	_           [8]byte
-}
-
-type KmeshSockopsSockStorageData struct {
-	ConnectNs      uint64
-	Direction      uint8
-	ConnectSuccess uint8
-	_              [6]byte
-}
-
 // LoadKmeshSockops returns the embedded CollectionSpec for KmeshSockops.
 func LoadKmeshSockops() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_KmeshSockopsBytes)
@@ -89,13 +77,11 @@ type KmeshSockopsMapSpecs struct {
 	KmeshCluster        *ebpf.MapSpec `ebpf:"kmesh_cluster"`
 	KmeshEvents         *ebpf.MapSpec `ebpf:"kmesh_events"`
 	KmeshListener       *ebpf.MapSpec `ebpf:"kmesh_listener"`
-	KmeshManage         *ebpf.MapSpec `ebpf:"kmesh_manage"`
 	KmeshTailCallCtx    *ebpf.MapSpec `ebpf:"kmesh_tail_call_ctx"`
 	KmeshTailCallProg   *ebpf.MapSpec `ebpf:"kmesh_tail_call_prog"`
 	MapOfClusterEps     *ebpf.MapSpec `ebpf:"map_of_cluster_eps"`
 	MapOfClusterEpsData *ebpf.MapSpec `ebpf:"map_of_cluster_eps_data"`
 	MapOfRouterConfig   *ebpf.MapSpec `ebpf:"map_of_router_config"`
-	MapOfSockStorage    *ebpf.MapSpec `ebpf:"map_of_sock_storage"`
 	OuterMap            *ebpf.MapSpec `ebpf:"outer_map"`
 	TmpBuf              *ebpf.MapSpec `ebpf:"tmp_buf"`
 	TmpLogBuf           *ebpf.MapSpec `ebpf:"tmp_log_buf"`
@@ -125,13 +111,11 @@ type KmeshSockopsMaps struct {
 	KmeshCluster        *ebpf.Map `ebpf:"kmesh_cluster"`
 	KmeshEvents         *ebpf.Map `ebpf:"kmesh_events"`
 	KmeshListener       *ebpf.Map `ebpf:"kmesh_listener"`
-	KmeshManage         *ebpf.Map `ebpf:"kmesh_manage"`
 	KmeshTailCallCtx    *ebpf.Map `ebpf:"kmesh_tail_call_ctx"`
 	KmeshTailCallProg   *ebpf.Map `ebpf:"kmesh_tail_call_prog"`
 	MapOfClusterEps     *ebpf.Map `ebpf:"map_of_cluster_eps"`
 	MapOfClusterEpsData *ebpf.Map `ebpf:"map_of_cluster_eps_data"`
 	MapOfRouterConfig   *ebpf.Map `ebpf:"map_of_router_config"`
-	MapOfSockStorage    *ebpf.Map `ebpf:"map_of_sock_storage"`
 	OuterMap            *ebpf.Map `ebpf:"outer_map"`
 	TmpBuf              *ebpf.Map `ebpf:"tmp_buf"`
 	TmpLogBuf           *ebpf.Map `ebpf:"tmp_log_buf"`
@@ -144,13 +128,11 @@ func (m *KmeshSockopsMaps) Close() error {
 		m.KmeshCluster,
 		m.KmeshEvents,
 		m.KmeshListener,
-		m.KmeshManage,
 		m.KmeshTailCallCtx,
 		m.KmeshTailCallProg,
 		m.MapOfClusterEps,
 		m.MapOfClusterEpsData,
 		m.MapOfRouterConfig,
-		m.MapOfSockStorage,
 		m.OuterMap,
 		m.TmpBuf,
 		m.TmpLogBuf,
