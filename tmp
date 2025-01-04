@@ -1,3 +1,43 @@
 
+func TestListenerFlushAndLookup(t *testing.T) {
+	config := options.BpfConfig{
+		Mode:        constants.KernelNativeMode,
+		BpfFsPath:   "/sys/fs/bpf",
+		Cgroup2Path: "/mnt/kmesh_cgroup2",
+	}
+	cleanup, _ := test.InitBpfMap(t, config)
+	t.Cleanup(cleanup)
 
-xxxx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xxxx
+	listener_addr := &core_v2.SocketAddress{
+		Protocol: core_v2.SocketAddress_TCP,
+		Port:     uint32(80),
+		Ipv4:     0x0AA8320A, //10.168.50.10
+	}
+
+	cache := NewListenerCache()
+	listener := &listener_v2.Listener{
+		ApiStatus: core_v2.ApiStatus_UPDATE,
+		Name:      "ut-listener",
+		FilterChains: []*listener_v2.FilterChain{
+			{
+				Name: "filterChain2",
+				FilterChainMatch: &listener_v2.FilterChainMatch{
+					DestinationPort:   22,
+					TransportProtocol: "udp",
+					ApplicationProtocols: []string{
+						"http1.1",
+						"http2.0",
+					},
+				},
+			},
+		},
+		Address: listener_addr,
+	}
+	cache.SetApiListener(listener.Name, listener)
+	cache.Flush()
+	assert.Equal(t, listener.GetApiStatus(), core_v2.ApiStatus_NONE)
+
+	listener.ApiStatus = core_v2.ApiStatus_DELETE
+	cache.Flush()
+
+}
