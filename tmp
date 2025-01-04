@@ -1,3 +1,29 @@
+func checkMap192Count(adsObj *ads.BpfAds, t *testing.T) int {
+	var count int
+	var key uint32
+	var value [192]byte
+	kmeshMap192 := adsObj.SockConn.KmeshCgroupSockMaps.KmeshMap192
+	iter192 := kmeshMap192.Iterate()
+	for iter192.Next(&key, &value) {
+		count++
+	}
+	assert.Nil(t, iter192.Err())
+	return count
+}
+
+func checkMapListenerCount(adsObj *ads.BpfAds, t *testing.T) int {
+	var count int
+	var key [40]byte
+	var value [64]byte
+	KmListener := adsObj.SockConn.KmeshCgroupSockMaps.KmListener
+	iterListener := KmListener.Iterate()
+	count = 0
+	for iterListener.Next(&key, &value) {
+		count++
+	}
+	assert.Nil(t, iterListener.Err())
+	return count
+}
 
 func TestListenerFlushAndLookup(t *testing.T) {
 	config := options.BpfConfig{
@@ -5,8 +31,11 @@ func TestListenerFlushAndLookup(t *testing.T) {
 		BpfFsPath:   "/sys/fs/bpf",
 		Cgroup2Path: "/mnt/kmesh_cgroup2",
 	}
-	cleanup, _ := test.InitBpfMap(t, config)
+	var count int
+
+	cleanup, loader := test.InitBpfMap(t, config)
 	t.Cleanup(cleanup)
+	adsObj := loader.GetBpfKmesh()
 
 	listener_addr := &core_v2.SocketAddress{
 		Protocol: core_v2.SocketAddress_TCP,
@@ -37,7 +66,16 @@ func TestListenerFlushAndLookup(t *testing.T) {
 	cache.Flush()
 	assert.Equal(t, listener.GetApiStatus(), core_v2.ApiStatus_NONE)
 
+	count = checkMap192Count(adsObj, t)
+	assert.Equal(t, 6, count, "eBPF map kmeshMap192 elements count should be 6")
+	count = checkMapListenerCount(adsObj, t)
+	assert.Equal(t, 1, count, "eBPF map KmListener elements count should be 1")
+
 	listener.ApiStatus = core_v2.ApiStatus_DELETE
 	cache.Flush()
 
+	count = checkMap192Count(adsObj, t)
+	assert.Equal(t, 0, count, "eBPF map elements count should be 0")
+	count = checkMapListenerCount(adsObj, t)
+	assert.Equal(t, 1, count, "eBPF map KmListener elements count should be 0")
 }
