@@ -1,175 +1,47 @@
-From 03cea45be513a52a0c57c022594d6a5e98450642 Mon Sep 17 00:00:00 2001
-From: zhangmingyi <zhangmingyi@huawei.com>
-Date: Thu, 9 Jan 2025 07:27:31 +0000
-Subject: [PATCH 3/4] add helper strnstr strncmp parse_header_msg
+将三个rpm包拷贝到对应设备上安装
 
-Signed-off-by: zhangmingyi <zhangmingyi@huawei.com>
----
- include/uapi/linux/bpf.h       |  3 ++
- net/core/filter.c              | 67 ++++++++++++++++++++++++++++++++++
- tools/include/uapi/linux/bpf.h |  3 ++
- 3 files changed, 73 insertions(+)
+```bash
 
-diff --git a/include/uapi/linux/bpf.h b/include/uapi/linux/bpf.h
-index fcda8b986..bd2235fc4 100644
---- a/include/uapi/linux/bpf.h
-+++ b/include/uapi/linux/bpf.h
-@@ -3987,6 +3987,9 @@ union bpf_attr {
- 	FN(get_sk_rx_dst),		\
- 	FN(xdp_set_skb_dst),		\
- 	FN(change_skb_dev),		\
-+	FN(km_strnstr),			\
-+	FN(km_strncmp),			\
-+	FN(parse_header_msg),		\
- 	/* */
- 
- /* integer value in 'imm' field of BPF_CALL instruction selects which helper
-diff --git a/net/core/filter.c b/net/core/filter.c
-index 431e778bb..4a5d944c9 100644
---- a/net/core/filter.c
-+++ b/net/core/filter.c
-@@ -7231,6 +7231,67 @@ const struct bpf_func_proto bpf_sock_ops_get_sk_rx_dst_proto = {
- };
- #endif
- 
-+typedef int (*bpf_parse_protocol_func)(struct bpf_sock_addr_kern* ctx);
-+bpf_parse_protocol_func parse_protocol_func = NULL;
-+EXPORT_SYMBOL(parse_protocol_func);
-+
-+typedef int (*bpf_km_strnstr_func)(struct bpf_sock_addr_kern *ctx, const char *key, int key_sz, const char *subptr, int subptr_sz);
-+bpf_km_strnstr_func km_strnstr_func = NULL;
-+EXPORT_SYMBOL(km_strnstr_func);
-+
-+typedef int (*bpf_km_strncmp_func)(struct bpf_sock_addr_kern *ctx, const char *key, int key_sz, const char *subptr, int subptr_sz);
-+bpf_km_strncmp_func km_strncmp_func = NULL;
-+EXPORT_SYMBOL(km_strncmp_func);
-+
-+BPF_CALL_1(bpf_parse_header_msg, struct bpf_sock_addr_kern *, ctx)
-+{
-+	if (!parse_protocol_func)
-+		return -ENOTSUPP;
-+	return parse_protocol_func(ctx);
-+}
-+
-+static const struct bpf_func_proto bpf_parse_header_msg_proto = {
-+	.func		= bpf_parse_header_msg,
-+	.gpl_only	= false,
-+	.ret_type	= RET_INTEGER,
-+	.arg1_type	= ARG_PTR_TO_CTX,
-+};
-+
-+BPF_CALL_5(bpf_km_strnstr, struct bpf_sock_addr_kern *, ctx, const char *, key, int , key_sz, const char *, subptr, int, subptr_sz)
-+{
-+	if (!km_strnstr_func)
-+		return -ENOTSUPP;
-+	return km_strnstr_func(ctx, key, key_sz, subptr, subptr_sz);
-+}
-+
-+static const struct bpf_func_proto bpf_km_strnstr_proto = {
-+	.func		= bpf_km_strnstr,
-+	.gpl_only	= false,
-+	.ret_type	= RET_INTEGER,
-+	.arg1_type	= ARG_PTR_TO_CTX,
-+	.arg2_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
-+	.arg3_type	= ARG_CONST_SIZE,
-+	.arg4_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
-+	.arg5_type	= ARG_CONST_SIZE,
-+};
-+
-+BPF_CALL_5(bpf_km_strncmp, struct bpf_sock_addr_kern *, ctx, const char *, key, int , key_sz, const char *, subptr, int, subptr_sz)
-+{
-+	if (!km_strncmp_func)
-+		return -ENOTSUPP;
-+	return km_strncmp_func(ctx, key, key_sz, subptr, subptr_sz);
-+}
-+
-+static const struct bpf_func_proto bpf_km_strncmp_proto = {
-+	.func		= bpf_km_strncmp,
-+	.gpl_only	= false,
-+	.ret_type	= RET_INTEGER,
-+	.arg1_type	= ARG_PTR_TO_CTX,
-+	.arg2_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
-+	.arg3_type	= ARG_CONST_SIZE,
-+	.arg4_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
-+	.arg5_type	= ARG_CONST_SIZE,
-+};
- #endif /* CONFIG_INET */
- 
- bool bpf_helper_changes_pkt_data(void *func)
-@@ -7385,6 +7446,12 @@ sock_addr_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
- 		default:
- 			return NULL;
- 		}
-+	case BPF_FUNC_parse_header_msg:
-+		return &bpf_parse_header_msg_proto;
-+	case BPF_FUNC_km_strnstr:
-+		return &bpf_km_strnstr_proto;
-+	case BPF_FUNC_km_strncmp:
-+		return &bpf_km_strncmp_proto;
- 	default:
- 		return bpf_sk_base_func_proto(func_id);
- 	}
-diff --git a/tools/include/uapi/linux/bpf.h b/tools/include/uapi/linux/bpf.h
-index 588750c46..63069c2a8 100644
---- a/tools/include/uapi/linux/bpf.h
-+++ b/tools/include/uapi/linux/bpf.h
-@@ -3983,6 +3983,9 @@ union bpf_attr {
- 	FN(get_sk_rx_dst),		\
- 	FN(xdp_set_skb_dst),		\
- 	FN(change_skb_dev),		\
-+	FN(km_strnstr),			\
-+	FN(km_strncmp),			\
-+	FN(parse_header_msg),		\
- 	/* */
- 
- /* integer value in 'imm' field of BPF_CALL instruction selects which helper
--- 
-2.33.0
+rpm -ivh kernel-5.10.0_60.18.0.50.r1083_58.hce2.x86_64-1.x86_64.rpm --force
+rpm -ivh kernel-devel-5.10.0_60.18.0.50.r1083_58.hce2.x86_64-1.x86_64.rpm
+rpm -ivh kernel-headers-5.10.0_60.18.0.50.r1083_58.hce2.x86_64-1.x86_64.rpm
+
+```
+
+执行如下命令，查看系统内部有多少个内核。如果查看不到，需要重新安装一下kernel包
+
+```
+(x86)cat /boot/grub2/grub.cfg | grep menuentry
+```
+
+```
+(arm)cat /boot/efi/EFI/euleros/grub.cfg |grep menuentry
+```
+
+```
+重新安装kernel包：
+rpm -e kernel
+yum localinstall -y kernel-5.10.0_60.18.0.50.r1083_58.hce2.x86_64-1.x86_64.rpm
+```
+
+2、参考如下命令，配置从默认内核启动。内核名称根据系统内部查到的实际名称来替换。
+
+```
+grub2-set-default 'Huawei Cloud EulerOS (5.10.0-60.18.0.50.r1083_58.hce2.x86_64) 2.0 (x86_64)'
+```
+
+3、执行如下命令，确认配置成功。
+
+```
+grub2-editenv list
 
 
-From 0436456007494da206743fcbcee0a9e23188af32 Mon Sep 17 00:00:00 2001
-From: zhangmingyi <zhangmingyi@huawei.com>
-Date: Thu, 9 Jan 2025 07:29:35 +0000
-Subject: [PATCH 4/4] add TCP_ULP support in bpf_get/set_sockopt
+[root@localhost ~]# grub2-editenv list
+saved_entry=Huawei Cloud EulerOS (5.10.0-60.18.0.50.r1083_58.hce2.x86_64) 2.0 (x86_64)
+boot_success=0
 
-Signed-off-by: zhangmingyi <zhangmingyi@huawei.com>
----
- net/core/filter.c | 14 ++++++++++++++
- 1 file changed, 14 insertions(+)
-
-diff --git a/net/core/filter.c b/net/core/filter.c
-index 2f56d21c9..789dc1c85 100644
---- a/net/core/filter.c
-+++ b/net/core/filter.c
-@@ -4925,6 +4925,12 @@ static int _bpf_setsockopt(struct sock *sk, int level, int optname,
- 						    TCP_CA_NAME_MAX-1));
- 			name[TCP_CA_NAME_MAX-1] = 0;
- 			ret = tcp_set_congestion_control(sk, name, false, true);
-+		} else if (optname == TCP_ULP) {
-+			char name[TCP_ULP_NAME_MAX] = {0};
-+
-+			strncpy(name, optval, min_t(long, optlen,
-+						    TCP_ULP_NAME_MAX - 1));
-+			return tcp_set_ulp(sk, name);
- 		} else {
- 			struct inet_connection_sock *icsk = inet_csk(sk);
- 			struct tcp_sock *tp = tcp_sk(sk);
-@@ -5042,6 +5048,14 @@ static int _bpf_getsockopt(struct sock *sk, int level, int optname,
- 				goto err_clear;
- 			memcpy(optval, tp->saved_syn->data, optlen);
- 			break;
-+		case TCP_ULP:
-+			icsk = inet_csk(sk);
-+			if (!icsk->icsk_ulp_ops || optlen <= 1) {
-+				goto err_clear;
-+			}
-+			strncpy(optval, icsk->icsk_ulp_ops->name, optlen);
-+			optval[optlen - 1] = 0;
-+			break;
- 		default:
- 			goto err_clear;
- 		}
--- 
-2.33.0
+```
 
 
+
+4、重启机器
