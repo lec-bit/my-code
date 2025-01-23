@@ -1,47 +1,74 @@
-将三个rpm包拷贝到对应设备上安装
 
-```bash
+// parseLogTime 解析日志行中的时间戳
+func parseLogTime(line string) (time.Time, error) {
+	// 使用正则表达式匹配时间戳
+	re := regexp.MustCompile(`\[(\w{3} \w{3} \d{1,2} \d{2}:\d{2}:\d{2} \d{4})\]`)
+	match := re.FindStringSubmatch(line)
+	if len(match) < 2 {
+		return time.Time{}, fmt.Errorf("no time match found")
+	}
+	// 解析时间字符串
+	logTime, err := time.Parse("Mon Jan 2 15:04:05 2006", match[1])
+	if err != nil {
+		return time.Time{}, err
+	}
+	return logTime, nil
+}
 
-rpm -ivh kernel-5.10.0_60.18.0.50.r1083_58.hce2.x86_64-1.x86_64.rpm --force
-rpm -ivh kernel-devel-5.10.0_60.18.0.50.r1083_58.hce2.x86_64-1.x86_64.rpm
-rpm -ivh kernel-headers-5.10.0_60.18.0.50.r1083_58.hce2.x86_64-1.x86_64.rpm
+func KmeshModuleLog(stopCh <-chan struct{}) {
+	go func() {
+		var cmd *exec.Cmd
 
-```
+		// 执行dmesg命令
+		cmd = exec.Command("dmesg", "-wT")
+		// 获取命令的标准输出
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			log.Errorf("Error creating stdout pipe: %v", err)
+			return
+		}
 
-执行如下命令，查看系统内部有多少个内核。如果查看不到，需要重新安装一下kernel包
-
-```
-(x86)cat /boot/grub2/grub.cfg | grep menuentry
-```
-
-```
-(arm)cat /boot/efi/EFI/euleros/grub.cfg |grep menuentry
-```
-
-```
-重新安装kernel包：
-rpm -e kernel
-yum localinstall -y kernel-5.10.0_60.18.0.50.r1083_58.hce2.x86_64-1.x86_64.rpm
-```
-
-2、参考如下命令，配置从默认内核启动。内核名称根据系统内部查到的实际名称来替换。
-
-```
-grub2-set-default 'Huawei Cloud EulerOS (5.10.0-60.18.0.50.r1083_58.hce2.x86_64) 2.0 (x86_64)'
-```
-
-3、执行如下命令，确认配置成功。
-
-```
-grub2-editenv list
-
-
-[root@localhost ~]# grub2-editenv list
-saved_entry=Huawei Cloud EulerOS (5.10.0-60.18.0.50.r1083_58.hce2.x86_64) 2.0 (x86_64)
-boot_success=0
-
-```
-
-
-
-4、重启机器
+		// 记录当前时间
+		startTime := time.Now()
+		// 启动命令
+		if err := cmd.Start(); err != nil {
+			log.Errorf("Error starting command: %v", err)
+			return
+		}
+		// 使用bufio.Scanner读取输出
+		scanner := bufio.NewScanner(stdout)
+		for {
+			select {
+			case <-stopCh:
+				// 接收到停止信号，尝试终止dmesg命令
+				if cmd.Process != nil {
+					cmd.Process.Kill()
+					cmd.Process.Wait()
+				}
+				return // 退出协程
+			default:
+				if !scanner.Scan() {
+					if err := scanner.Err(); err != nil {
+						log.Errorf("Error reading from stdout: %v", err)
+					}
+					break
+				}
+				line := scanner.Text()
+				// 筛选以Kmesh_module开头的行
+				if !strings.Contains(line, "Kmesh_module") {
+					continue
+				}
+				logTime, err := parseLogTime(line)
+				if err != nil {
+					log.Errorf("Error parsing log time: %v", err)
+					log.Info(line)
+					continue
+				}
+				// 如果日志时间晚于当前进程启动时间，则打印
+				if logTime.After(startTime) {
+					log.Info(line)
+				}
+			}
+		}
+	}()
+}
