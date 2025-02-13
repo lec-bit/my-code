@@ -1,0 +1,33 @@
+From 0436456007494da206743fcbcee0a9e23188af32 Mon Sep 17 00:00:00 2001
+From: zhangmingyi <zhangmingyi@huawei.com>
+Date: Thu, 9 Jan 2025 07:29:35 +0000
+Subject: [PATCH 4/4] add TCP_ULP support in bpf_get/set_sockopt
+
+int oe2203 sp4, bpf_setsockopt is added
+
+Signed-off-by: zhangmingyi <zhangmingyi@huawei.com>
+---
+ net/core/filter.c | 8 ++++++++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/net/core/filter.c b/net/core/filter.c
+index 2f56d21c9..789dc1c85 100644
+--- a/net/core/filter.c
++++ b/net/core/filter.c
+@@ -5042,6 +5048,14 @@ static int _bpf_getsockopt(struct sock *sk, int level, int optname,
+ 				goto err_clear;
+ 			memcpy(optval, tp->saved_syn->data, optlen);
+ 			break;
++		case TCP_ULP:
++			icsk = inet_csk(sk);
++			if (!icsk->icsk_ulp_ops || optlen <= 1) {
++				goto err_clear;
++			}
++			strncpy(optval, icsk->icsk_ulp_ops->name, optlen);
++			optval[optlen - 1] = 0;
++			break;
+ 		default:
+ 			goto err_clear;
+ 		}
+-- 
+2.33.0
