@@ -52,18 +52,40 @@ bpf_setsockopt_func(void *bpf_socket, int bpf_socket__sz, int optname, const cha
 }
 
 __bpf_kfunc int
-bpf_getsockopt_func(void *bpf_socket, int bpf_socket__sz, int optname, char __user *optval, int optval__sz)
+bpf_getsockopt_func(void *bpf_socket, int bpf_socket__sz, int optname, char *opt, int opt__sz)
 {
         struct bpf_mem_ptr *tmp = bpf_socket;
         struct bpf_sock_addr_kern *ctx = tmp->ptr;
         struct sock *sk = ctx->sk;
 
-        if (sk != NULL)
-                return tcp_getsockopt(sk, SOL_TCP, optname,
-                                                        optval, &optval__sz);
+        struct inet_connection_sock *icsk = inet_csk(sk);
+        struct tcp_sock *tp = tcp_sk(sk);
+        struct net *net = sock_net(sk);
+        int val, len;
+        
+        sockptr_t optval = KERNEL_SOCKPTR(opt);
+        sockptr_t optlen = KERNEL_SOCKPTR(&opt__sz);
 
-        return -1;
+        if (copy_from_sockptr(&len, optlen, sizeof(int)))
+                return -EFAULT;
+
+        if (len < 0)
+                return -EINVAL;
+
+        len = min_t(unsigned int, len, TCP_ULP_NAME_MAX);
+        if (!icsk->icsk_ulp_ops) {
+                len = 0;
+                if (copy_to_sockptr(optlen, &len, sizeof(int)))
+                        return -EFAULT;
+                return 0;
+        }
+        if (copy_to_sockptr(optlen, &len, sizeof(int)))
+                return -EFAULT;
+        if (copy_to_sockptr(optval, icsk->icsk_ulp_ops->name, len))
+                return -EFAULT;
+        return 0;
 }
+
 
 __diag_pop();
 
