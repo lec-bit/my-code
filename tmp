@@ -1,0 +1,359 @@
+Reference:https://github.com/libbpf/libbpf/commit/ecf998ed8ff51efd3887ff7caca0a0cc56a88082
+https://github.com/libbpf/libbpf/commit/f6f24022d3054d2855612e642f8fe9f1148b4275
+https://github.com/libbpf/libbpf/commit/984dcc97ae50c566924277aedc4967e1222e38c2
+https://github.com/libbpf/libbpf/commit/81ac790dc831a5b753b310138f2201f87b55169b
+https://github.com/libbpf/libbpf/commit/0e3971339f06c23aa9402a33057ecb3aac7795aa
+https://github.com/libbpf/libbpf/commit/2dea4b86ee82a48912e54b49ac4c255eca592067
+
+
+From 2dea4b86ee82a48912e54b49ac4c255eca592067 Mon Sep 17 00:00:00 2001
+From: Andrii Nakryiko <andrii@kernel.org>
+Date: Tue, 22 Oct 2024 21:39:07 -0700
+Subject: [PATCH] libbpf: move global data mmap()'ing into bpf_object__load()
+ 
+ Since BPF skeleton inception libbpf has been doing mmap()'ing of global
+ data ARRAY maps in bpf_object__load_skeleton() API, which is used by
+ code generated .skel.h files (i.e., by BPF skeletons only).
+ 
+ This is wrong because if BPF object is loaded through generic
+ bpf_object__load() API, global data maps won't be re-mmap()'ed after
+ load step, and memory pointers returned from bpf_map__initial_value()
+ would be wrong and won't reflect the actual memory shared between BPF
+ program and user space.
+ 
+ bpf_map__initial_value() return result is rarely used after load, so
+ this went unnoticed for a really long time, until bpftrace project
+ attempted to load BPF object through generic bpf_object__load() API and
+ then used BPF subskeleton instantiated from such bpf_object. It turned
+ out that .data/.rodata/.bss data updates through such subskeleton was
+ "blackholed", all because libbpf wouldn't re-mmap() those maps during
+ bpf_object__load() phase.
+ 
+ Long story short, this step should be done by libbpf regardless of BPF
+ skeleton usage, right after BPF map is created in the kernel. This patch
+ moves this functionality into bpf_object__populate_internal_map() to
+ achieve this. And bpf_object__load_skeleton() is now simple and almost
+ trivial, only propagating these mmap()'ed pointers into user-supplied
+ skeleton structs.
+ 
+ We also do trivial adjustments to error reporting inside
+ bpf_object__populate_internal_map() for consistency with the rest of
+ libbpf's map-handling code.
+ 
+ Reported-by: Alastair Robertson <ajor@meta.com>
+ Reported-by: Jonathan Wiepert <jwiepert@meta.com>
+ Fixes: d66562fba1ce ("libbpf: Add BPF object skeleton support")
+ Signed-off-by: Andrii Nakryiko <andrii@kernel.org>
+ Link: https://lore.kernel.org/r/20241023043908.3834423-3-andrii@kernel.org
+ Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+ 
+ Conflict:In the original patch, the function code is moved from the bpf object __load_skeleton to the bpf object __populate_internal_map. The implementation details of the function code are different due to version changes. Therefore, the function code is moved again according to this method.
+ Reference: https://github.com/libbpf/libbpf/commit/2dea4b86ee82a48912e54b49ac4c255eca592067
+---
+ src/libbpf.c | 81 ++++++++++++++++++++++++++--------------------------
+ 1 file changed, 41 insertions(+), 40 deletions(-)
+ 
+diff --git a/src/libbpf.c b/src/libbpf.c
+index 8d63238..cd8203f 100644
+--- a/src/libbpf.c
++++ b/src/libbpf.c
+@@ -4971,6 +4971,7 @@ bpf_object__populate_internal_map(struct bpf_object *obj, struct bpf_map *map)
+ 	enum libbpf_map_type map_type = map->libbpf_type;
+ 	char *cp, errmsg[STRERR_BUFSIZE];
+ 	int err, zero = 0;
++	size_t mmap_sz;
+ 
+ 	if (obj->gen_loader) {
+ 		bpf_gen__map_update_elem(obj->gen_loader, map - obj->maps,
+@@ -4983,8 +4984,8 @@ bpf_object__populate_internal_map(struct bpf_object *obj, struct bpf_map *map)
+ 	if (err) {
+ 		err = -errno;
+ 		cp = libbpf_strerror_r(err, errmsg, sizeof(errmsg));
+-		pr_warn("Error setting initial map(%s) contents: %s\n",
+-			map->name, cp);
++		pr_warn("map '%s': failed to set initial contents: %s\n",
++			bpf_map__name(map), cp);
+ 		return err;
+ 	}
+ 
+@@ -4994,11 +4995,45 @@ bpf_object__populate_internal_map(struct bpf_object *obj, struct bpf_map *map)
+ 		if (err) {
+ 			err = -errno;
+ 			cp = libbpf_strerror_r(err, errmsg, sizeof(errmsg));
+-			pr_warn("Error freezing map(%s) as read-only: %s\n",
+-				map->name, cp);
++			pr_warn("map '%s': failed to freeze as read-only: %s\n",
++				bpf_map__name(map), cp);
+ 			return err;
+ 		}
+ 	}
++
++	/* Remap anonymous mmap()-ed "map initialization image" as
++	* a BPF map-backed mmap()-ed memory, but preserving the same
++	* memory address. This will cause kernel to change process'
++	* page table to point to a different piece of kernel memory,
++	* but from userspace point of view memory address (and its
++	* contents, being identical at this point) will stay the
++	* same. This mapping will be released by bpf_object__close()
++	* as per normal clean up procedure, so we don't need to worry
++	* about it from skeleton's clean up perspective.
++	*/
++	mmap_sz = bpf_map_mmap_sz(map);
++	if (map->def.map_flags & BPF_F_MMAPABLE) {
++		void *mmaped;
++		int prot;
++
++		if (map->def.map_flags & BPF_F_RDONLY_PROG)
++			prot = PROT_READ;
++		else
++			prot = PROT_READ | PROT_WRITE;
++		mmaped = mmap(map->mmaped, mmap_sz, prot,
++				MAP_SHARED | MAP_FIXED, map->fd, 0);
++		if (mmaped == MAP_FAILED) {
++			err = -errno;
++			mmaped = NULL;
++			pr_warn("failed to re-mmap() map '%s': %d\n",
++				bpf_map__name(map), err);
++			return libbpf_err(err);
++		}
++	} else if (map->mmaped) {
++		munmap(map->mmaped, mmap_sz);
++		map->mmaped = NULL;
++	}
++
+ 	return 0;
+ }
+ 
+@@ -13128,44 +13163,10 @@ int bpf_object__load_skeleton(struct bpf_object_skeleton *s)
+ 
+ 	for (i = 0; i < s->map_cnt; i++) {
+ 		struct bpf_map *map = *s->maps[i].map;
+-		size_t mmap_sz = bpf_map_mmap_sz(map);
+-		int prot, map_fd = bpf_map__fd(map);
+-		void **mmaped = s->maps[i].mmaped;
+-
+-		if (!mmaped)
++		if (!s->maps[i].mmaped)
+ 			continue;
+-
+-		if (!(map->def.map_flags & BPF_F_MMAPABLE)) {
+-			*mmaped = NULL;
+-			continue;
+-		}
+-
+-		if (map->def.map_flags & BPF_F_RDONLY_PROG)
+-			prot = PROT_READ;
+-		else
+-			prot = PROT_READ | PROT_WRITE;
+-
+-		/* Remap anonymous mmap()-ed "map initialization image" as
+-		 * a BPF map-backed mmap()-ed memory, but preserving the same
+-		 * memory address. This will cause kernel to change process'
+-		 * page table to point to a different piece of kernel memory,
+-		 * but from userspace point of view memory address (and its
+-		 * contents, being identical at this point) will stay the
+-		 * same. This mapping will be released by bpf_object__close()
+-		 * as per normal clean up procedure, so we don't need to worry
+-		 * about it from skeleton's clean up perspective.
+-		 */
+-		*mmaped = mmap(map->mmaped, mmap_sz, prot,
+-				MAP_SHARED | MAP_FIXED, map_fd, 0);
+-		if (*mmaped == MAP_FAILED) {
+-			err = -errno;
+-			*mmaped = NULL;
+-			pr_warn("failed to re-mmap() map '%s': %d\n",
+-				 bpf_map__name(map), err);
+-			return libbpf_err(err);
+-		}
++		*s->maps[i].mmaped = map->mmaped;
+ 	}
+-
+ 	return 0;
+ }
+ 
+-- 
+2.33.0
+
+
+From f6f24022d3054d2855612e642f8fe9f1148b4275 Mon Sep 17 00:00:00 2001
+From: Andrii Nakryiko <andrii@kernel.org>
+Date: Tue, 27 Aug 2024 13:37:21 -0700
+Subject: [PATCH] libbpf: Fix bpf_object__open_skeleton()'s mishandling of
+  options
+ MIME-Version: 1.0
+ Content-Type: text/plain; charset=UTF-8
+ Content-Transfer-Encoding: 8bit
+ 
+ We do an ugly copying of options in bpf_object__open_skeleton() just to
+ be able to set object name from skeleton's recorded name (while still
+ allowing user to override it through opts->object_name).
+ 
+ This is not just ugly, but it also is broken due to memcpy() that
+ doesn't take into account potential skel_opts' and user-provided opts'
+ sizes differences due to backward and forward compatibility. This leads
+ to copying over extra bytes and then failing to validate options
+ properly. It could, technically, lead also to SIGSEGV, if we are unlucky.
+ 
+ So just get rid of that memory copy completely and instead pass
+ default object name into bpf_object_open() directly, simplifying all
+ this significantly. The rule now is that obj_name should be non-NULL for
+ bpf_object_open() when called with in-memory buffer, so validate that
+ explicitly as well.
+ 
+ We adopt bpf_object__open_mem() to this as well and generate default
+ name (based on buffer memory address and size) outside of bpf_object_open().
+ 
+ Fixes: d66562fba1ce ("libbpf: Add BPF object skeleton support")
+ Reported-by: Daniel Müller <deso@posteo.net>
+ Signed-off-by: Andrii Nakryiko <andrii@kernel.org>
+ Signed-off-by: Daniel Borkmann <daniel@iogearbox.net>
+ Reviewed-by: Daniel Müller <deso@posteo.net>
+ Acked-by: Eduard Zingerman <eddyz87@gmail.com>
+ Link: https://lore.kernel.org/bpf/20240827203721.1145494-1-andrii@kernel.org
+ 
+ Conflict:1:Context adaptation: Deleted token_path. No related patch is introduced in this version.
+ 2:add bpf_object__open_xattr by bpf_object__open_file, add bpf_object__open_buffer by bpf_object__open_mem
+ Reference: https://github.com/libbpf/libbpf/commit/f6f24022d3054d2855612e642f8fe9f1148b4275
+---
+ src/libbpf.c | 61 ++++++++++++++++++++++------------------------------
+ 1 file changed, 26 insertions(+), 35 deletions(-)
+ 
+diff --git a/src/libbpf.c b/src/libbpf.c
+index 25a91ba..11ccc70 100644
+--- a/src/libbpf.c
++++ b/src/libbpf.c
+@@ -7362,16 +7362,19 @@ static int bpf_object_init_progs(struct bpf_object *obj, const struct bpf_object
+ }
+ 
+ static struct bpf_object *bpf_object_open(const char *path, const void *obj_buf, size_t obj_buf_sz,
++					  const char *obj_name,
+ 					  const struct bpf_object_open_opts *opts)
+ {
+-	const char *obj_name, *kconfig, *btf_tmp_path;
++	const char *kconfig, *btf_tmp_path;
+ 	struct bpf_object *obj;
+-	char tmp_name[64];
+ 	int err;
+ 	char *log_buf;
+ 	size_t log_size;
+ 	__u32 log_level;
+ 
++	if (obj_buf && !obj_name)
++		return ERR_PTR(-EINVAL);
++
+ 	if (elf_version(EV_CURRENT) == EV_NONE) {
+ 		pr_warn("failed to init libelf for %s\n",
+ 			path ? : "(mem buf)");
+@@ -7381,16 +7384,12 @@ static struct bpf_object *bpf_object_open(const char *path, const void *obj_buf,
+ 	if (!OPTS_VALID(opts, bpf_object_open_opts))
+ 		return ERR_PTR(-EINVAL);
+ 
+-	obj_name = OPTS_GET(opts, object_name, NULL);
++	obj_name = OPTS_GET(opts, object_name, NULL) ?: obj_name;
+ 	if (obj_buf) {
+-		if (!obj_name) {
+-			snprintf(tmp_name, sizeof(tmp_name), "%lx-%lx",
+-				 (unsigned long)obj_buf,
+-				 (unsigned long)obj_buf_sz);
+-			obj_name = tmp_name;
+-		}
+ 		path = obj_name;
+ 		pr_debug("loading object '%s' from buffer\n", obj_name);
++	} else {
++		pr_debug("loading object from %s\n", path);
+ 	}
+ 
+ 	log_buf = OPTS_GET(opts, kernel_log_buf, NULL);
+@@ -7462,7 +7461,7 @@ __bpf_object__open_xattr(struct bpf_object_open_attr *attr, int flags)
+ 		return NULL;
+ 
+ 	pr_debug("loading %s\n", attr->file);
+-	return bpf_object_open(attr->file, NULL, 0, &opts);
++	return bpf_object_open(attr->file, NULL, 0, NULL, &opts);
+ }
+ 
+ struct bpf_object *bpf_object__open_xattr(struct bpf_object_open_attr *attr)
+@@ -7486,25 +7485,30 @@ bpf_object__open_file(const char *path, const struct bpf_object_open_opts *opts)
+ 	if (!path)
+ 		return libbpf_err_ptr(-EINVAL);
+ 
+-	pr_debug("loading %s\n", path);
+-
+-	return libbpf_ptr(bpf_object_open(path, NULL, 0, opts));
++	return libbpf_ptr(bpf_object_open(path, NULL, 0, NULL, opts));
+ }
+ 
+ struct bpf_object *
+ bpf_object__open_mem(const void *obj_buf, size_t obj_buf_sz,
+ 		     const struct bpf_object_open_opts *opts)
+ {
++	char tmp_name[64];
++
+ 	if (!obj_buf || obj_buf_sz == 0)
+ 		return libbpf_err_ptr(-EINVAL);
+ 
+-	return libbpf_ptr(bpf_object_open(NULL, obj_buf, obj_buf_sz, opts));
++	/* create a (quite useless) default "name" for this memory buffer object */
++	snprintf(tmp_name, sizeof(tmp_name), "%lx-%zx", (unsigned long)obj_buf, obj_buf_sz);
++
++	return libbpf_ptr(bpf_object_open(NULL, obj_buf, obj_buf_sz, tmp_name, opts));
+ }
+ 
+ struct bpf_object *
+ bpf_object__open_buffer(const void *obj_buf, size_t obj_buf_sz,
+ 			const char *name)
+ {
++	char tmp_name[64];
++
+ 	DECLARE_LIBBPF_OPTS(bpf_object_open_opts, opts,
+ 		.object_name = name,
+ 		/* wrong default, but backwards-compatible */
+@@ -7515,7 +7519,10 @@ bpf_object__open_buffer(const void *obj_buf, size_t obj_buf_sz,
+ 	if (!obj_buf || obj_buf_sz == 0)
+ 		return errno = EINVAL, NULL;
+ 
+-	return libbpf_ptr(bpf_object_open(NULL, obj_buf, obj_buf_sz, &opts));
++	/* create a (quite useless) default "name" for this memory buffer object */
++	snprintf(tmp_name, sizeof(tmp_name), "%lx-%zx", (unsigned long)obj_buf, obj_buf_sz);
++
++	return libbpf_ptr(bpf_object_open(NULL, obj_buf, obj_buf_sz, tmp_name, &opts));
+ }
+ 
+ static int bpf_object_unload(struct bpf_object *obj)
+@@ -13013,29 +13020,13 @@ static int populate_skeleton_progs(const struct bpf_object *obj,
+ int bpf_object__open_skeleton(struct bpf_object_skeleton *s,
+ 			      const struct bpf_object_open_opts *opts)
+ {
+-	DECLARE_LIBBPF_OPTS(bpf_object_open_opts, skel_opts,
+-		.object_name = s->name,
+-	);
+ 	struct bpf_object *obj;
+ 	int err;
+ 
+-	/* Attempt to preserve opts->object_name, unless overriden by user
+-	 * explicitly. Overwriting object name for skeletons is discouraged,
+-	 * as it breaks global data maps, because they contain object name
+-	 * prefix as their own map name prefix. When skeleton is generated,
+-	 * bpftool is making an assumption that this name will stay the same.
+-	 */
+-	if (opts) {
+-		memcpy(&skel_opts, opts, sizeof(*opts));
+-		if (!opts->object_name)
+-			skel_opts.object_name = s->name;
+-	}
+-
+-	obj = bpf_object__open_mem(s->data, s->data_sz, &skel_opts);
+-	err = libbpf_get_error(obj);
+-	if (err) {
+-		pr_warn("failed to initialize skeleton BPF object '%s': %d\n",
+-			s->name, err);
++	obj = bpf_object_open(NULL, s->data, s->data_sz, s->name, opts);
++	if (IS_ERR(obj)) {
++		err = PTR_ERR(obj);
++		pr_warn("failed to initialize skeleton BPF object '%s': %d\n", s->name, err);
+ 		return libbpf_err(err);
+ 	}
+ 
+-- 
+2.33.0
+

@@ -1,0 +1,108 @@
+#include "vmlinux.h"
+#include "common.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+
+#define bpf_section(NAME) __attribute__((section(NAME), used))
+
+#define KPROBE(func, type) \
+    bpf_section("kprobe/" #func) \
+    int bpf_##func(struct type *ctx)
+
+#define MAX_IOVEC 4
+#define __MAX_CONCURRENCY   1000
+#define IPV6_ADDR_LEN 16
+#define CONN_DATA_MAX_SIZE 1023
+
+struct http_probe_info {
+    char data[CONN_DATA_MAX_SIZE];
+    __u64 iov_len;
+};
+
+#ifndef bpf_memcpy
+#define bpf_memcpy(dest, src, n) __builtin_memcpy((dest), (src), (n))
+#endif
+
+// direction
+enum {
+    INVALID_DIRECTION = 0,
+    INBOUND = 1,
+    OUTBOUND = 2,
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 256 * 1024 /* 256 KB */);
+} map_of_http_probe SEC(".maps");
+
+// int security_socket_sendmsg(struct socket *sock, struct msghdr *msg, int size)
+KPROBE(security_socket_sendmsg, pt_regs)
+{    
+    struct socket *l_socket = (struct socket *)PT_REGS_PARM1(ctx);
+    struct msghdr *const msg = (struct msghdr *)PT_REGS_PARM2(ctx); // 通过 pt_regs 获取参数
+    __u64 iov_len;
+    struct sock *l_sock;
+    const struct sockaddr_in *l_usin;
+    uint64_t sin_family_t = 0;
+    int ret = 0;
+    struct http_probe_info *info = NULL;
+
+    // 安全读取 msghdr 字段
+    if (!msg) return 0;
+    struct iov_iter iter = {0};
+    BPF_CORE_READ_INTO(&iter, msg, msg_iter); // 正确获取 iov_iter
+
+    struct iovec iov = {0};
+    char buf[128] = {0};
+    char iov_base[128] = {0};
+    ret = bpf_probe_read_user(&iov, sizeof(struct iovec), iter.__iov);
+    if (ret != 0) { 
+        bpf_printk("1 ret:%d\n", ret);
+        return 0;
+    }
+
+    ret = bpf_probe_read_user(buf, sizeof(buf), iter.__iov);
+    if (ret != 0) {
+        bpf_printk("4 ret:%d\n", ret);
+        return 0;
+    }
+
+    if (buf[0] == 'G') {
+        bpf_printk("Data: %s\n", buf);
+        bpf_printk("iov.iov_len: %lu\n", iov.iov_len);
+        bpf_printk("iov.iov_base: %s\n", iov.iov_base);
+        ret = bpf_probe_read_user(iov_base, sizeof(iov_base), iov.iov_base);
+        if (ret != 0) {
+            bpf_printk("2 ret:%d\n", ret);
+            return 0;
+        }
+
+        ret = bpf_probe_read_user(&iov_len, sizeof(iov_len), &iov.iov_len);
+        if (ret != 0) {
+            bpf_printk("3 ret:%d\n", ret);
+            return 0;
+        }
+
+        bpf_printk("Data iov_base: %s\n", iov_base);
+        bpf_printk("Dataleniov_len:  %u\n", iov_len);
+
+
+        info = bpf_ringbuf_reserve(&map_of_http_probe, sizeof(struct http_probe_info), 0);
+        if (info == NULL) {
+            bpf_printk("info is NULL");
+            return 0;
+        }
+        bpf_probe_read_user(info->data, CONN_DATA_MAX_SIZE, buf);
+        info->iov_len = iov_len;
+        bpf_ringbuf_submit(info, 0);
+    }
+
+
+    return 1;
+}
+
+
+
+
+char __license[] SEC("license") = "Dual BSD/GPL";

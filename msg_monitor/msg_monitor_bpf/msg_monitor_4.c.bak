@@ -1,0 +1,70 @@
+#include "vmlinux.h"
+#include "common.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+
+#define MAX_IOVEC 4
+#define __MAX_CONCURRENCY   1000
+#define IPV6_ADDR_LEN 16
+#define CONN_DATA_MAX_SIZE 1023
+
+struct http_probe_info {
+    char data[CONN_DATA_MAX_SIZE];
+    __u64 iov_len;
+};
+
+#ifndef bpf_memcpy
+#define bpf_memcpy(dest, src, n) __builtin_memcpy((dest), (src), (n))
+#endif
+
+// direction
+enum {
+    INVALID_DIRECTION = 0,
+    INBOUND = 1,
+    OUTBOUND = 2,
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 256 * 1024 /* 256 KB */);
+} map_of_http_probe SEC(".maps");
+
+SEC("tracepoint/syscalls/sys_enter_sendmsg")
+int sendmsg_entry(struct sys_enter_sendmsg_args *ctx) {
+    conn_ctx_t id = bpf_get_current_pid_tgid();
+    int proc_id = (int)(id >> INT_LEN);
+    int offset = 0;
+    bpf_printk("conn_ctx_t:%d\n", id);
+
+    struct user_msghdr *msg = ctx->msg;
+    void * msg_name = BPF_CORE_READ_USER(msg, msg_name);
+    struct iovec* iov = BPF_CORE_READ_USER(msg, msg_iov);
+    __u64 iovlen = BPF_CORE_READ_USER(msg, msg_iovlen);
+    bpf_printk("sys_enter_sendmsg\n");
+
+    if (msg_name) {
+        bpf_printk("SENDMSG msg_name is here\n");
+    }
+
+    struct http_probe_info *info = bpf_ringbuf_reserve(&map_of_http_probe, sizeof(struct http_probe_info), 0);
+    if (!info) {
+        bpf_printk("info is NULL");
+        return 0;
+    }
+
+
+    struct iovec iov_cpy = {0};
+    bpf_probe_read_user(&iov_cpy, sizeof(struct iovec), &iov[0]);
+
+    __u64 iov_len = iov_cpy.iov_len;
+    bpf_probe_read_user(info->data, iov_len & CONN_DATA_MAX_SIZE, iov_cpy.iov_base);
+    info->iov_len = iovlen;
+
+    bpf_printk("SENDMSG info->data= %s iov_cpy.iov_len:%d iovlen:%d\n", info->data, iov_cpy.iov_len, iovlen);
+    bpf_ringbuf_submit(info, 0);
+
+    return 0;
+}
+
+char _license[] SEC("license") = "GPL";
