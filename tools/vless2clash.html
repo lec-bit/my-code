@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>芝麻 VLESS 转 YAML (定制版)</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; background-color: #f2f4f7; color: #333; }
+        .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        h1 { text-align: center; margin-top: 0; color: #007aff; }
+        label { display: block; margin-bottom: 8px; font-weight: bold; }
+        input[type="text"] { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; margin-bottom: 15px; box-sizing: border-box; font-family: monospace; font-size: 14px; }
+        input:focus { border-color: #007aff; outline: none; }
+        
+        .btn-group { display: flex; gap: 10px; }
+        button { flex: 1; padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: bold; transition: opacity 0.2s; }
+        button:hover { opacity: 0.9; }
+        .btn-gen { background-color: #007aff; color: white; }
+        .btn-copy { background-color: #34c759; color: white; }
+
+        textarea { width: 100%; height: 450px; padding: 15px; margin-top: 20px; border: 1px solid #ddd; border-radius: 8px; font-family: "Menlo", "Consolas", monospace; font-size: 13px; background-color: #fafafa; white-space: pre; overflow-wrap: normal; overflow-x: auto; }
+        .preview-icon { text-align: center; margin-bottom: 15px; }
+        .preview-icon img { width: 40px; height: 40px; border-radius: 50%; vertical-align: middle; margin-right: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h1>🚀 芝麻 VLESS 一键转换器</h1>
+    
+    <div class="preview-icon">
+        <span>内置图标：</span>
+        <img src="https://www.helloimg.com/i/2026/01/30/697c132a23439.jpg" alt="Icon">
+    </div>
+
+    <label for="vlessLink">请粘贴你的 vless:// 链接：</label>
+    <input type="text" id="vlessLink" placeholder="vless://be3fa8be-53f3-4855-85de-9b30fadab228@...">
+
+    <div class="btn-group">
+        <button class="btn-gen" onclick="startConvert()">🛠️ 生成配置文件</button>
+        <button class="btn-copy" onclick="copyResult()">📋 复制结果</button>
+    </div>
+
+    <textarea id="output" placeholder="点击生成后，结果显示在这里..."></textarea>
+</div>
+
+<script>
+    // 你的猫猫图
+    const ICON_URL = "https://www.helloimg.com/i/2026/01/30/697c132a23439.jpg";
+
+    function startConvert() {
+        const input = document.getElementById('vlessLink').value.trim();
+        
+        if (!input) { alert("请先粘贴链接！"); return; }
+        if (!input.startsWith("vless://")) { alert("这不是 vless:// 开头的链接，请检查复制是否完整。"); return; }
+
+        try {
+            // === 核心解析逻辑：字符串暴力切割 (100% 兼容你的格式) ===
+            
+            // 1. 去掉 vless://
+            let raw = input.substring(8); 
+
+            // 2. 提取 名字 (Hash) -> #芝麻-Reality
+            let name = "芝麻-Reality"; // 默认值
+            if (raw.includes('#')) {
+                const parts = raw.split('#');
+                raw = parts[0]; // 剩下的部分
+                // decodeURIComponent 解决中文乱码问题
+                name = decodeURIComponent(parts[1]).trim();
+            }
+
+            // 3. 提取 参数 (Query) -> ?encryption=none&...
+            let params = {};
+            if (raw.includes('?')) {
+                const parts = raw.split('?');
+                raw = parts[0]; // 剩下 uuid@ip:port
+                const queryStr = parts[1];
+                
+                // 拆解 a=1&b=2
+                queryStr.split('&').forEach(pair => {
+                    const [key, val] = pair.split('=');
+                    if (key) params[key] = val || "";
+                });
+            }
+
+            // 4. 提取 UUID, IP, Port -> uuid@ip:port
+            let uuid = "", server = "", port = "";
+            if (raw.includes('@')) {
+                const parts = raw.split('@');
+                uuid = parts[0];
+                const address = parts[1]; // ip:port
+                
+                // 处理 ipv6 或 ipv4
+                if (address.includes(']:')) { 
+                    // IPv6 暂不处理复杂情况，按 IPv4 逻辑兼容
+                    const addrParts = address.split(']:');
+                    server = addrParts[0] + ']';
+                    port = addrParts[1];
+                } else if (address.includes(':')) {
+                    const addrParts = address.split(':');
+                    server = addrParts[0];
+                    port = addrParts[1];
+                }
+            }
+
+            // 5. 组装参数 (你的链接里有的)
+            const pbk = params['pbk'] || "";
+            const sid = params['sid'] || "";
+            const flow = params['flow'] || ""; // 如果你想关掉流控，手动改这里为 ""
+            const sni = params['sni'] || "www.microsoft.com";
+            const fp  = params['fp'] || "chrome";
+            const type = params['type'] || "tcp";
+
+            // 校验
+            if (!uuid || !server || !port || !pbk) {
+                alert("❌ 解析失败：缺少关键信息 (UUID/IP/Port/Public Key)\n请确认链接格式正确！");
+                return;
+            }
+
+            // === 生成 YAML 模板 (完全按照你的要求) ===
+            const yaml = `# clash-config.yaml
+# 生成时间: ${new Date().toLocaleString()}
+port: 7890
+socks-port: 7891
+mixed-port: 7890
+allow-lan: true
+mode: rule
+log-level: info
+external-controller: '127.0.0.1:9090'
+ipv6: false
+
+# DNS 设置 (防泄漏优化)
+dns:
+  enable: true
+  ipv6: false
+  listen: 0.0.0.0:53
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - "*.localhost"
+    - "*.msftconnecttest.com"
+    - "*.msftncsi.com"
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  nameserver:
+    - 'https://doh.pub/dns-query'
+    - 'https://dns.alidns.com/dns-query'
+  fallback:
+    - 'https://1.1.1.1/dns-query'
+    - 'https://dns.google/dns-query'
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr:
+      - 240.0.0.0/4
+
+# 代理节点
+proxies:
+  - name: "${name}"
+    type: vless
+    server: ${server}
+    port: ${port}
+    uuid: ${uuid}
+    network: ${type}
+    tls: true
+    udp: true
+    flow: ${flow}
+    servername: ${sni}
+    client-fingerprint: ${fp}
+    icon: "${ICON_URL}"
+    reality-opts:
+      public-key: ${pbk}
+      short-id: ${sid}
+
+# 代理组
+proxy-groups:
+  - name: 🐱 猫猫基地
+    type: select
+    icon: "${ICON_URL}"
+    proxies:
+      - "${name}"
+      - DIRECT
+
+# 规则
+rules:
+  # === 广告拦截 ===
+  - DOMAIN-KEYWORD,adservice,REJECT
+  - DOMAIN-SUFFIX,googleadservices.com,REJECT
+
+  # === 局域网 ===
+  - IP-CIDR,192.168.0.0/16,DIRECT
+  - IP-CIDR,10.0.0.0/8,DIRECT
+  - IP-CIDR,127.0.0.0/8,DIRECT
+  - IP-CIDR,172.16.0.0/12,DIRECT
+
+  # === 国内直连 ===
+  - DOMAIN-SUFFIX,cn,DIRECT
+  - DOMAIN-KEYWORD,-cn,DIRECT
+  - DOMAIN-SUFFIX,126.net,DIRECT
+  - DOMAIN-SUFFIX,163.com,DIRECT
+  - DOMAIN-SUFFIX,qq.com,DIRECT
+  - DOMAIN-SUFFIX,baidu.com,DIRECT
+  - DOMAIN-SUFFIX,taobao.com,DIRECT
+  - DOMAIN-SUFFIX,alipay.com,DIRECT
+  - DOMAIN-SUFFIX,bilibili.com,DIRECT
+  - DOMAIN-SUFFIX,jd.com,DIRECT
+  - DOMAIN-SUFFIX,zhihu.com,DIRECT
+  - DOMAIN-SUFFIX,weibo.com,DIRECT
+  
+  # === 强制代理 ===
+  - DOMAIN-SUFFIX,google.com,🐱 猫猫基地
+  - DOMAIN-SUFFIX,youtube.com,🐱 猫猫基地
+  - DOMAIN-SUFFIX,github.com,🐱 猫猫基地
+  - DOMAIN-SUFFIX,telegram.org,🐱 猫猫基地
+  - DOMAIN-SUFFIX,twitter.com,🐱 猫猫基地
+  - DOMAIN-SUFFIX,openai.com,🐱 猫猫基地
+
+  # === 最终规则 ===
+  - GEOIP,CN,DIRECT
+  - MATCH,🐱 猫猫基地
+`;
+            
+            // 输出结果
+            document.getElementById('output').value = yaml;
+
+        } catch (e) {
+            console.error(e);
+            alert("❌ 程序出错：" + e.message);
+        }
+    }
+
+    function copyResult() {
+        const text = document.getElementById('output');
+        if(!text.value) { alert("请先生成内容！"); return; }
+        text.select();
+        navigator.clipboard.writeText(text.value).then(() => {
+            alert("✅ 复制成功！请覆盖 config.yaml 文件。");
+        });
+    }
+</script>
+
+</body>
+</html>
