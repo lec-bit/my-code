@@ -1,5 +1,5 @@
 From 09f37be7cfd4ca8c942eadcc1fe8d50324a34d15 Mon Sep 17 00:00:00 2001
-From: zmy <zmy@huawei.com>
+From: zhangmingyi <zhangmingyi5@huawei.com>
 Date: Fri, 22 Aug 2025 15:34:13 +0800
 Subject: [PATCH] lwip add flow and bond6 switch
 
@@ -14,7 +14,7 @@ index 970ce40..24abaab 100644
  #include "lwip/dns.h"
 +#include "netif/ethernet.h"
 +
-+#if GAZELLE_ENABLE && (OFFLOAD_CHECKSUM_CHECK_IP || OFFLOAD_CHECKSUM_GEN_IP)
++#if GAZELLE_ENABLE
 +#include "lwipgz_offload.h"
 +#endif
  
