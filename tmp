@@ -1,5 +1,5 @@
-From 2d8aa7d8993a131d7cd4105791976e42169e5604 Mon Sep 17 00:00:00 2001
-From: zhangmingyi <zhangmingyi5@huawei.com>
+From cb00c346f4280de4cd75fd39713a733723e107df Mon Sep 17 00:00:00 2001
+From: zmy <zmy@huawei.com>
 Date: Fri, 22 Aug 2025 15:34:13 +0800
 Subject: [PATCH] lwip add flow and bond6 switch
 
@@ -95,15 +95,14 @@ index 970ce40..24abaab 100644
  
        /* Check that link-layer address option also fits in packet. */
 diff --git a/src/core/netif.c b/src/core/netif.c
-index 94cde99..fe16c49 100644
+index 94cde99..a5cb3a8 100644
 --- a/src/core/netif.c
 +++ b/src/core/netif.c
-@@ -295,14 +295,13 @@ netif_add(struct netif *netif,
+@@ -295,14 +295,12 @@ netif_add(struct netif *netif,
  #endif
  
    LWIP_ASSERT_CORE_LOCKED();
 -
-+  LWIP_DEBUGF(LWIP_DBG_ON | LWIP_DBG_TRACE, ("netif_add LWIP_SINGLE_NETIF:%d\n", LWIP_SINGLE_NETIF));
  #if LWIP_SINGLE_NETIF
    if (netif_default != NULL) {
      LWIP_ASSERT("single netif already set", 0);
@@ -113,18 +112,6 @@ index 94cde99..fe16c49 100644
 -
    LWIP_ERROR("netif_add: invalid netif", netif != NULL, return NULL);
    LWIP_ERROR("netif_add: No init function given", init != NULL, return NULL);
- 
-@@ -433,6 +432,11 @@ netif_add(struct netif *netif,
-   /* add this netif to the list */
-   netif->next = netif_list;
-   netif_list = netif;
-+  LWIP_DEBUGF(LWIP_DBG_ON | LWIP_DBG_TRACE,
-+      ("netif add new mac: %02X:%02X:%02X:%02X:%02X:%02X\n",
-+        netif->hwaddr[0], netif->hwaddr[1],
-+        netif->hwaddr[2], netif->hwaddr[3],
-+        netif->hwaddr[4], netif->hwaddr[5]));
- #endif /* "LWIP_SINGLE_NETIF */
-   mib2_netif_added(netif);
  
 diff --git a/src/include/arch/sys_arch.h b/src/include/arch/sys_arch.h
 index 98d9ddf..75982e5 100644
