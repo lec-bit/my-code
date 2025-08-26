@@ -1,4 +1,4 @@
-From cb00c346f4280de4cd75fd39713a733723e107df Mon Sep 17 00:00:00 2001
+From 09f37be7cfd4ca8c942eadcc1fe8d50324a34d15 Mon Sep 17 00:00:00 2001
 From: zmy <zmy@huawei.com>
 Date: Fri, 22 Aug 2025 15:34:13 +0800
 Subject: [PATCH] lwip add flow and bond6 switch
@@ -94,25 +94,6 @@ index 970ce40..24abaab 100644
  #endif /* LWIP_IPV6_DUP_DETECT_ATTEMPTS */
  
        /* Check that link-layer address option also fits in packet. */
-diff --git a/src/core/netif.c b/src/core/netif.c
-index 94cde99..a5cb3a8 100644
---- a/src/core/netif.c
-+++ b/src/core/netif.c
-@@ -295,14 +295,12 @@ netif_add(struct netif *netif,
- #endif
- 
-   LWIP_ASSERT_CORE_LOCKED();
--
- #if LWIP_SINGLE_NETIF
-   if (netif_default != NULL) {
-     LWIP_ASSERT("single netif already set", 0);
-     return NULL;
-   }
- #endif
--
-   LWIP_ERROR("netif_add: invalid netif", netif != NULL, return NULL);
-   LWIP_ERROR("netif_add: No init function given", init != NULL, return NULL);
- 
 diff --git a/src/include/arch/sys_arch.h b/src/include/arch/sys_arch.h
 index 98d9ddf..75982e5 100644
 --- a/src/include/arch/sys_arch.h
