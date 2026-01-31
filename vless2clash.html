@@ -3,71 +3,123 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VLESS 转 FlClash 专用配置</title>
+    <title>芝麻 VLESS 转 YAML (定制版)</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; background-color: #f5f5f7; color: #1d1d1f; }
-        h1 { text-align: center; color: #000; }
-        .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
-        label { display: block; margin-bottom: 0.5rem; font-weight: bold; }
-        input[type="text"] { width: 100%; padding: 0.8rem; border: 1px solid #d2d2d7; border-radius: 8px; margin-bottom: 1rem; box-sizing: border-box; font-size: 1rem; }
-        button { background-color: #0071e3; color: white; border: none; padding: 0.8rem 1.5rem; border-radius: 8px; cursor: pointer; font-size: 1rem; width: 100%; transition: background-color 0.2s; }
-        button:hover { background-color: #0077ed; }
-        textarea { width: 100%; height: 400px; padding: 1rem; border: 1px solid #d2d2d7; border-radius: 8px; font-family: monospace; font-size: 0.9rem; margin-top: 1rem; box-sizing: border-box; white-space: pre; overflow-wrap: normal; overflow-x: scroll; }
-        .icon-preview { text-align: center; margin-bottom: 1rem; }
-        .icon-preview img { width: 48px; height: 48px; border-radius: 8px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; background-color: #f2f4f7; color: #333; }
+        .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        h1 { text-align: center; margin-top: 0; color: #007aff; }
+        label { display: block; margin-bottom: 8px; font-weight: bold; }
+        input[type="text"] { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; margin-bottom: 15px; box-sizing: border-box; font-family: monospace; font-size: 14px; }
+        input:focus { border-color: #007aff; outline: none; }
+        
+        .btn-group { display: flex; gap: 10px; }
+        button { flex: 1; padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: bold; transition: opacity 0.2s; }
+        button:hover { opacity: 0.9; }
+        .btn-gen { background-color: #007aff; color: white; }
+        .btn-copy { background-color: #34c759; color: white; }
+
+        textarea { width: 100%; height: 450px; padding: 15px; margin-top: 20px; border: 1px solid #ddd; border-radius: 8px; font-family: "Menlo", "Consolas", monospace; font-size: 13px; background-color: #fafafa; white-space: pre; overflow-wrap: normal; overflow-x: auto; }
+        .preview-icon { text-align: center; margin-bottom: 15px; }
+        .preview-icon img { width: 40px; height: 40px; border-radius: 50%; vertical-align: middle; margin-right: 10px; }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <h1>🌱 芝麻 VLESS 转 YAML 工具</h1>
+    <h1>🚀 芝麻 VLESS 一键转换器</h1>
     
-    <label for="vlessInput">粘贴你的 VLESS 链接:</label>
-    <input type="text" id="vlessInput" placeholder="vless://uuid@ip:443?security=reality...">
-
-    <div class="icon-preview">
-        <p>将使用以下图标和模板：</p>
+    <div class="preview-icon">
+        <span>内置图标：</span>
         <img src="https://www.helloimg.com/i/2026/01/30/697c132a23439.jpg" alt="Icon">
     </div>
 
-    <button onclick="convert()">生成配置文件</button>
+    <label for="vlessLink">请粘贴你的 vless:// 链接：</label>
+    <input type="text" id="vlessLink" placeholder="vless://be3fa8be-53f3-4855-85de-9b30fadab228@...">
 
-    <textarea id="output" placeholder="生成的配置将显示在这里..."></textarea>
-    <button onclick="copyToClipboard()" style="margin-top: 10px; background-color: #34c759;">复制配置</button>
+    <div class="btn-group">
+        <button class="btn-gen" onclick="startConvert()">🛠️ 生成配置文件</button>
+        <button class="btn-copy" onclick="copyResult()">📋 复制结果</button>
+    </div>
+
+    <textarea id="output" placeholder="点击生成后，结果显示在这里..."></textarea>
 </div>
 
 <script>
+    // 你的猫猫图
     const ICON_URL = "https://www.helloimg.com/i/2026/01/30/697c132a23439.jpg";
 
-    function convert() {
-        const vlessLink = document.getElementById('vlessInput').value.trim();
-        if (!vlessLink.startsWith('vless://')) {
-            alert('请输入正确的 vless:// 链接');
-            return;
-        }
+    function startConvert() {
+        const input = document.getElementById('vlessLink').value.trim();
+        
+        if (!input) { alert("请先粘贴链接！"); return; }
+        if (!input.startsWith("vless://")) { alert("这不是 vless:// 开头的链接，请检查复制是否完整。"); return; }
 
         try {
-            // 解析 VLESS 链接
-            const urlObj = new URL(vlessLink);
-            const uuid = urlObj.username;
-            const server = urlObj.hostname;
-            const port = urlObj.port;
-            const params = new URLSearchParams(urlObj.search);
-            const name = decodeURIComponent(urlObj.hash.slice(1)) || "芝麻-Reality";
+            // === 核心解析逻辑：字符串暴力切割 (100% 兼容你的格式) ===
+            
+            // 1. 去掉 vless://
+            let raw = input.substring(8); 
 
-            // 提取参数
-            const flow = params.get('flow') || "";
-            const security = params.get('security') || "reality";
-            const sni = params.get('sni') || "";
-            const pbk = params.get('pbk') || "";
-            const sid = params.get('sid') || "";
-            const fp = params.get('fp') || "chrome";
-            const type = params.get('type') || "tcp";
+            // 2. 提取 名字 (Hash) -> #芝麻-Reality
+            let name = "芝麻-Reality"; // 默认值
+            if (raw.includes('#')) {
+                const parts = raw.split('#');
+                raw = parts[0]; // 剩下的部分
+                // decodeURIComponent 解决中文乱码问题
+                name = decodeURIComponent(parts[1]).trim();
+            }
 
-            // 构建 YAML 模板 (完全使用你的配置)
-            const yamlContent = `# clash-config.yaml
-# 自动生成时间: ${new Date().toLocaleString()}
-# 基础端口设置
+            // 3. 提取 参数 (Query) -> ?encryption=none&...
+            let params = {};
+            if (raw.includes('?')) {
+                const parts = raw.split('?');
+                raw = parts[0]; // 剩下 uuid@ip:port
+                const queryStr = parts[1];
+                
+                // 拆解 a=1&b=2
+                queryStr.split('&').forEach(pair => {
+                    const [key, val] = pair.split('=');
+                    if (key) params[key] = val || "";
+                });
+            }
+
+            // 4. 提取 UUID, IP, Port -> uuid@ip:port
+            let uuid = "", server = "", port = "";
+            if (raw.includes('@')) {
+                const parts = raw.split('@');
+                uuid = parts[0];
+                const address = parts[1]; // ip:port
+                
+                // 处理 ipv6 或 ipv4
+                if (address.includes(']:')) { 
+                    // IPv6 暂不处理复杂情况，按 IPv4 逻辑兼容
+                    const addrParts = address.split(']:');
+                    server = addrParts[0] + ']';
+                    port = addrParts[1];
+                } else if (address.includes(':')) {
+                    const addrParts = address.split(':');
+                    server = addrParts[0];
+                    port = addrParts[1];
+                }
+            }
+
+            // 5. 组装参数 (你的链接里有的)
+            const pbk = params['pbk'] || "";
+            const sid = params['sid'] || "";
+            const flow = params['flow'] || ""; // 如果你想关掉流控，手动改这里为 ""
+            const sni = params['sni'] || "www.microsoft.com";
+            const fp  = params['fp'] || "chrome";
+            const type = params['type'] || "tcp";
+
+            // 校验
+            if (!uuid || !server || !port || !pbk) {
+                alert("❌ 解析失败：缺少关键信息 (UUID/IP/Port/Public Key)\n请确认链接格式正确！");
+                return;
+            }
+
+            // === 生成 YAML 模板 (完全按照你的要求) ===
+            const yaml = `# clash-config.yaml
+# 生成时间: ${new Date().toLocaleString()}
 port: 7890
 socks-port: 7891
 mixed-port: 7890
@@ -77,7 +129,7 @@ log-level: info
 external-controller: '127.0.0.1:9090'
 ipv6: false
 
-# DNS 设置
+# DNS 设置 (防泄漏优化)
 dns:
   enable: true
   ipv6: false
@@ -134,7 +186,7 @@ proxy-groups:
 
 # 规则
 rules:
-  # === 广告与隐私拦截 ===
+  # === 广告拦截 ===
   - DOMAIN-KEYWORD,adservice,REJECT
   - DOMAIN-SUFFIX,googleadservices.com,REJECT
 
@@ -144,26 +196,51 @@ rules:
   - IP-CIDR,127.0.0.0/8,DIRECT
   - IP-CIDR,172.16.0.0/12,DIRECT
 
-  # === 国内域名直连 ===
+  # === 国内直连 ===
   - DOMAIN-SUFFIX,cn,DIRECT
   - DOMAIN-KEYWORD,-cn,DIRECT
   - DOMAIN-SUFFIX,126.net,DIRECT
   - DOMAIN-SUFFIX,163.com,DIRECT
-  - DOMAIN-SUFFIX,360buyimg.com,DIRECT
-  - DOMAIN-SUFFIX,alicdn.com,DIRECT
-  - DOMAIN-SUFFIX,alipay.com,DIRECT
+  - DOMAIN-SUFFIX,qq.com,DIRECT
   - DOMAIN-SUFFIX,baidu.com,DIRECT
+  - DOMAIN-SUFFIX,taobao.com,DIRECT
+  - DOMAIN-SUFFIX,alipay.com,DIRECT
   - DOMAIN-SUFFIX,bilibili.com,DIRECT
   - DOMAIN-SUFFIX,jd.com,DIRECT
-  - DOMAIN-SUFFIX,qq.com,DIRECT
-  - DOMAIN-SUFFIX,taobao.com,DIRECT
-  - DOMAIN-SUFFIX,weibo.com,DIRECT
   - DOMAIN-SUFFIX,zhihu.com,DIRECT
-
-  # === 强制走代理 ===
+  - DOMAIN-SUFFIX,weibo.com,DIRECT
+  
+  # === 强制代理 ===
   - DOMAIN-SUFFIX,google.com,🐱 猫猫基地
   - DOMAIN-SUFFIX,youtube.com,🐱 猫猫基地
   - DOMAIN-SUFFIX,github.com,🐱 猫猫基地
   - DOMAIN-SUFFIX,telegram.org,🐱 猫猫基地
   - DOMAIN-SUFFIX,twitter.com,🐱 猫猫基地
-  - DOM
+  - DOMAIN-SUFFIX,openai.com,🐱 猫猫基地
+
+  # === 最终规则 ===
+  - GEOIP,CN,DIRECT
+  - MATCH,🐱 猫猫基地
+`;
+            
+            // 输出结果
+            document.getElementById('output').value = yaml;
+
+        } catch (e) {
+            console.error(e);
+            alert("❌ 程序出错：" + e.message);
+        }
+    }
+
+    function copyResult() {
+        const text = document.getElementById('output');
+        if(!text.value) { alert("请先生成内容！"); return; }
+        text.select();
+        navigator.clipboard.writeText(text.value).then(() => {
+            alert("✅ 复制成功！请覆盖 config.yaml 文件。");
+        });
+    }
+</script>
+
+</body>
+</html>
