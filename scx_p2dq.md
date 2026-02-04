@@ -1,86 +1,3 @@
-```
-  task_ctx *taskc;
-  struct llc_ctx *llcx;
-  struct cpu_ctx *cpuc;
-```
-
-
-
-p2dq负载计算是一个“开始-结束”的闭环测量过程：将运行耗时记录在
-
-#### A. 闭环测量 (Start-Stop Measurement)
-
-负载的本质是**CPU 使用时间**。要准确计算一个任务用了多少 CPU，必须知道它“什么时候开始”和“什么时候结束”。
-
-1. **开始 (`p2dq_running`)**: 当任务被调度上 CPU 时，`p2dq_running` 会记录当前时间戳：
-
-   C
-
-   ```
-   // scx_p2dq/src/bpf/main.bpf.c
-   taskc->last_run_at = now; //
-   ```
-
-2. **结束 (`p2dq_stopping`)**: 当任务离开 CPU 时，`p2dq_stopping` 计算差值：
-
-   C
-
-   ```
-   // scx_p2dq/src/bpf/main.bpf.c
-   used = now - taskc->last_run_at; // 计算本次运行的精确时长
-   ```
-
-**为什么准确？** 因为 `stopping` 时刻是任务本次占用 CPU 的**终点**。只有到了终点，我们才能确定它到底跑了多久。如果在任务运行中间去采样（比如每秒扫描一次），反而不如这种基于事件的统计精确。
-
-#### B. 频繁的更新频率 (High Frequency)
-
-你可能会担心：*“如果一个任务一直跑，很久不调用 stopping，负载数据岂不是旧的？”*
-
-在 `scx` 和 `p2dq` 的设计中，这是通过**时间片（Time Slice）**来保证的。
-
-- `p2dq` 设定了 `timeline_config.max_exec_ns`（默认 20ms）。
-- 如果一个任务是 CPU 密集型的（一直跑），内核会强制触发时间片中断。
-- 这会导致任务被“赶下” CPU（触发 `stopping`），更新负载，然后可能立即又被调度上来（触发 `running`）。
-
-因此，负载数据的更新频率至少是几十毫秒一次，对于负载均衡决策来说，这个“实时性”已经足够准确。
-
-#### C. PELT 算法的集成 (指数衰减)
-
-代码中不仅仅是简单的累加，还使用了类似内核 PELT (Per-Entity Load Tracking) 的算法：
-
-C
-
-```
-// scx_p2dq/src/bpf/main.bpf.c -> p2dq_stopping
-
-/* Update PELT metrics if enabled */
-if (p2dq_config.pelt_enabled) {
-    update_task_pelt(taskc, now, used, task_cpu); // 更新任务的 PELT
-    aggregate_pelt_to_llc(llcx, taskc, ...);      // 将任务负载聚合到 LLC
-} else {
-    __sync_fetch_and_add(&llcx->load, used);      // 简单模式：直接累加时间
-}
-```
-
-- **`update_task_pelt`**: 这个函数不仅加上了本次运行的 `used` 时间，还会根据距离上次更新的时间间隔进行**指数衰减**。
-- 这意味着：旧的负载权重会逐渐降低，新的负载权重更高。这种机制使得 `util_avg` 能够平滑且准确地反映“最近的”负载压力，而不是历史总和。
-
-参考如上算法，可以在
-
-
-
-
-
-
-
-1、简单讲下内核CFS逻辑，如何计算的负载，以及PELT算法
-
-2、讲下scx中p2dq算法和lavid算法中如何计算的负载
-
-3、引出我们应该以什么方式计算负载(当前参考p2dq算法中简易PELT算法，做成cpu粒度)
-
-
-
 # Linux 内核 CFS 调度器：负载追踪与选核机制详解
 
 ## 1. 核心概念：什么是“负载” (Load)？
@@ -135,18 +52,18 @@ PELT 将时间切分成 1024us（约 1ms）的窗口。它使用**指数衰减�
 
 ### 流程图：PELT 更新机制
 
-代码段
 
-```
+
+```mermaid
 graph LR
     A[时钟中断 / 任务状态变更] --> B{任务在运行?}
     B -- 是 --> C[累加当前窗口负载]
     B -- 否 --> D[只进行指数衰减]
-    C --> E[更新 load_avg (权重)]
-    C --> F[更新 util_avg (利用率)]
+    C --> E["更新 load_avg (权重)"]
+    C --> F["更新 util_avg (利用率)"]
     D --> E
     D --> F
-    E --> G[聚合到 cfs_rq (CPU总负载)]
+    E --> G["聚合到 cfs_rq (CPU总负载)"]
     F --> G
 ```
 
@@ -176,23 +93,23 @@ CFS 的统计是自下而上的层级汇总。
 
 代码段
 
-```
+```mermaid
 graph TD
-    A[任务被唤醒 (Wakeup)] --> B(进入 select_task_rq_fair)
-    B --> C{是否开启 EAS (能效调度)?}
+    A["任务被唤醒 (Wakeup)"] --> B("进入 select_task_rq_fair")
+    B --> C{"是否开启 EAS (能效调度)?"}
     
-    C -- 是 (如手机/异构CPU) --> D[利用 util_avg 寻找能效最优 CPU]
-    D --> E[预测任务放在哪里最省电且不拥挤]
+    C -- "是 (如手机/异构CPU)" --> D["利用 util_avg 寻找能效最优 CPU"]
+    D --> E["预测任务放在哪里最省电且不拥挤"]
     
-    C -- 否 (如服务器) --> F{当前 CPU 是否空闲?}
-    F -- 是 (快速路径) --> G[检查是否需要唤醒亲和性 CPU]
-    F -- 否 (慢速路径) --> H[遍历调度域 (Sched Domain)]
+    C -- "否 (如服务器)" --> F{"当前 CPU 是否空闲?"}
+    F -- "是 (快速路径)" --> G["检查是否需要唤醒亲和性 CPU"]
+    F -- "否 (慢速路径)" --> H["遍历调度域 (Sched Domain)"]
     
-    H --> I[查找最空闲的组 (Idlest Group)]
-    I --> J[在组内查找最空闲的 CPU (Idlest CPU)]
+    H --> I["查找最空闲的组 (Idlest Group)"]
+    I --> J["在组内查找最空闲的 CPU (Idlest CPU)"]
     
-    J --> K[比较 load_avg 和 util_avg]
-    K --> L[返回目标 CPU]
+    J --> K["比较 load_avg 和 util_avg"]
+    K --> L["返回目标 CPU"]
 ```
 
 ### 关键步骤解析：
@@ -344,4 +261,61 @@ void BPF_STRUCT_OPS(my_stopping, struct task_struct *p, bool runnable)
 ```
 
 
+
+```mermaid
+graph TD
+    %% 定义样式
+    classDef struct fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
+    classDef action fill:#fff9c4,stroke:#fbc02d,stroke-width:2px;
+    classDef logic fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px;
+
+    subgraph "阶段一：任务开始运行 (ops.running)"
+        RunStart("🚀 触发 ops.running(p)"):::action
+        
+        GetTaskCtx1["获取任务上下文<br>struct task_ctx *taskc"]:::struct
+        RunStart --> GetTaskCtx1
+
+        GetTime1["获取当前时间<br>u64 now = bpf_ktime_get_ns()"]:::logic
+        GetTaskCtx1 --> GetTime1
+
+        UpdateStartT["更新开始时间<br>taskc->last_run_at = now"]:::struct
+        GetTime1 --> UpdateStartT
+    end
+
+    subgraph "阶段二：任务停止运行 (ops.stopping)"
+        StopStart("🛑 触发 ops.stopping(p, runnable)"):::action
+        UpdateStartT -.->|"任务执行中..."| StopStart
+
+        GetTaskCtx2["获取任务上下文<br>struct task_ctx *taskc"]:::struct
+        StopStart --> GetTaskCtx2
+
+        GetTime2["获取当前时间<br>u64 now = bpf_ktime_get_ns()"]:::logic
+        GetTaskCtx2 --> GetTime2
+
+        CalcDelta["计算运行差值 (Delta)<br>u64 delta = now - taskc->last_run_at"]:::logic
+        GetTime2 --> CalcDelta
+
+        GetCpuCtx["获取当前 CPU 上下文<br>struct cpu_ctx *cpuc = bpf_per_cpu_ptr(...)"]:::struct
+        CalcDelta --> GetCpuCtx
+
+        subgraph "核心负载更新逻辑 (CPU粒度)"
+            CheckPelt{"是否启用 PELT?"}
+            
+            %% 分支A：简单累加模式
+            SimpleLoad["简单模式: 直接累加<br>cpuc->load += delta"]:::struct
+            
+            %% 分支B：PELT 模式 (参考 p2dq 实现)
+            PeltLoad["PELT 模式: 指数衰减更新<br>1. 衰减 cpuc->util_avg<br>2. 加权累加 delta 到 cpuc->util_avg"]:::struct
+            
+            CheckPelt -- "否 (Legacy)" --> SimpleLoad
+            CheckPelt -- "是 (推荐)" --> PeltLoad
+        end
+        
+        GetCpuCtx --> CheckPelt
+
+        UpdateVtime["更新虚拟时间 (公平性)<br>p->scx.dsq_vtime += delta"]:::struct
+        SimpleLoad --> UpdateVtime
+        PeltLoad --> UpdateVtime
+    end
+```
 
